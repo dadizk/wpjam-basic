@@ -128,16 +128,12 @@ class WPJAM_SEO extends WPJAM_Option_Model{
 				}
 			}
 
-			$sitemap_posts	= WPJAM_Query([
-				'posts_per_page'	=> 1000,
-				'paged'				=> $action,
-				'post_type'			=> $post_types,
-			])->posts;
+			$posts	= wpjam_get_posts(['posts_per_page'=>1000, 'paged'=>$action, 'post_type'=>$post_types]);
 
-			if($sitemap_posts){
-				foreach ($sitemap_posts as $sitemap_post) {
-					$permalink	= get_permalink($sitemap_post->ID); //$siteurl.$sitemap_post->post_name.'/';
-					$last_mod	= str_replace(' ', 'T', $sitemap_post->post_modified_gmt).'+00:00';
+			if($posts){
+				foreach($posts as $post){
+					$permalink	= get_permalink($post->ID); //$siteurl.$post->post_name.'/';
+					$last_mod	= str_replace(' ', 'T', $post->post_modified_gmt).'+00:00';
 					$sitemap	.="\t<url>\n";
 					$sitemap	.="\t\t<loc>".$permalink."</loc>\n";
 					$sitemap	.="\t\t<lastmod>".$last_mod."</lastmod>\n";
@@ -234,8 +230,7 @@ class WPJAM_SEO extends WPJAM_Option_Model{
 
 	public static function filter_html($html){
 		$title 	= self::get_meta_value('title');
-		$keys	= ['description', 'keywords'];
-		$values	= array_filter(array_combine($keys, array_map([self::class, 'get_meta_value'], $keys)));
+		$values	= array_filter(wpjam_fill(['description', 'keywords'], [self::class, 'get_meta_value']));
 
 		if($values){
 			$html	= preg_replace('#<meta\s{1,}name=[\'"]('.implode('|', array_keys($values)).')[\'"]\s{1,}content=[\'"].*?[\'"]\s{1,}\/>#is', '', $html);

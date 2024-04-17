@@ -28,8 +28,9 @@ class WPJAM_Basic_Posts extends WPJAM_Option_Model{
 		];
 
 		$other_fields	= [
-			'remove_post_tag'	=> ['value'=>0,	'description'=>'移除标签功能'],
-			'404_optimization'	=> ['value'=>0,	'description'=>'增强404页面跳转']
+			'remove_post_tag'		=> ['value'=>0,	'description'=>'移除标签功能'],
+			'remove_page_thumbnail'	=> ['value'=>0,	'description'=>'移除页面特色图片'],
+			'404_optimization'		=> ['value'=>0,	'description'=>'增强404页面跳转'],
 		];
 
 		return ['posts'	=>['title'=>'文章设置',	'fields'=>WPJAM_Basic::parse_fields([
@@ -125,6 +126,10 @@ class WPJAM_Basic_Posts extends WPJAM_Option_Model{
 		}
 	}
 
+	protected static function find_matched($posts, $args){
+		return wpjam_find($posts, fn($post) => wpjam_match($post, $args));
+	}
+
 	public static function find_by_name($post_name, $post_type='', $post_status='publish'){
 		$args	= $args_with_type = $args_for_meta = [];
 
@@ -144,17 +149,17 @@ class WPJAM_Basic_Posts extends WPJAM_Option_Model{
 		$posts	= $meta ? WPJAM_Post::get_by_ids(array_column($meta, 'post_id')) : [];
 
 		if($args_with_type){
-			foreach($posts as $post){
-				if(wpjam_match($post, $args_with_type)){
-					return $post;
-				}
+			$post	= self::find_matched($posts, $args_with_type);
+
+			if($post){
+				return $post;
 			}
 		}
 
-		foreach($posts as $post){
-			if(wpjam_match($post, $args_for_meta)){
-				return $post;
-			}
+		$post	= self::find_matched($posts, $args_for_meta);
+
+		if($post){
+			return $post;
 		}
 
 		$wpdb		= $GLOBALS['wpdb'];
@@ -168,22 +173,14 @@ class WPJAM_Basic_Posts extends WPJAM_Option_Model{
 		$posts		= $post_ids ? WPJAM_Post::get_by_ids($post_ids) : [];
 
 		if($args_with_type){
-			foreach($posts as $post){
-				if(wpjam_match($post, $args_with_type)){
-					return $post;
-				}
-			}
-		}
+			$post	= self::find_matched($posts, $args_with_type);
 
-		foreach($posts as $post){
-			if($args){
-				if(wpjam_match($post, $args)){
-					return $post;
-				}
-			}else{
+			if($post){
 				return $post;
 			}
 		}
+
+		return $args ? self::find_matched($posts, $args) : reset($posts);
 	}
 
 	public static function filter_get_the_excerpt($text='', $post=null){
@@ -220,6 +217,10 @@ class WPJAM_Basic_Posts extends WPJAM_Option_Model{
 		if(self::get_setting('remove_post_tag')){
 			unregister_taxonomy_for_object_type('post_tag', 'post');
 		}
+
+		if(self::get_setting('remove_page_thumbnail')){
+			remove_post_type_support('page', 'thumbnail');
+		}
 	}
 
 	public static function add_hooks(){
@@ -245,12 +246,12 @@ class WPJAM_Posts_Widget extends WP_Widget{
 		echo $args['before_widget'];
 
 		if(!empty($instance['title'])){
-			echo $args['before_title'].array_pull($instance, 'title').$args['after_title'];
+			echo $args['before_title'].wpjam_pull($instance, 'title').$args['after_title'];
 		}
 
-		$instance['posts_per_page']	= array_pull($instance, 'number') ?: 5;
+		$instance['posts_per_page']	= wpjam_pull($instance, 'number') ?: 5;
 
-		$type	= array_pull($instance, 'type') ?: 'new';
+		$type	= wpjam_pull($instance, 'type') ?: 'new';
 
 		if($type == 'new'){
 			echo wpjam_get_new_posts($instance);

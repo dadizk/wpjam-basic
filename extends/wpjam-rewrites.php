@@ -211,9 +211,9 @@ class WPJAM_Rewrite{
 	public static function map_meta_cap($user_id, $args){
 		if($args && !empty($args[0]) && WPJAM_Rewrite::is_added($args[0]) === false){
 			return ['do_not_allow'];
-		}else{
-			return is_multisite() ? ['manage_sites'] : ['manage_options'];
 		}
+
+		return is_multisite() ? ['manage_sites'] : ['manage_options'];
 	}
 
 	public static function get_list_table(){

@@ -40,7 +40,7 @@ class WPJAM_Basic extends WPJAM_Option_Model{
 			];
 
 			return self::parse_fields([
-				'static_cdn'			=>['title'=>'前端公共库',		'type'=>'select',	'options'=>array_combine($static_options, array_map(fn($url) => parse_url($url, PHP_URL_HOST), $static_options))],
+				'static_cdn'			=>['title'=>'前端公共库',		'type'=>'select',	'options'=>wpjam_fill($static_options, fn($url) => parse_url($url, PHP_URL_HOST))],
 				'google_fonts_set'		=>['title'=>'Google字体加速','type'=>'fieldset',	'mp'=>'Sz0QlZ-kW0C70NkbpoDpag',	'fields'=>WPJAM_Google_Font::get_setting_fields(['name'=>'google_fonts'])],
 				'gravatar_set'			=>['title'=>'Gravatar加速',	'type'=>'fieldset',	'mp'=>'eyHr2r-vrqSqADwMkPh95Q',	'fields'=>WPJAM_Gravatar::get_setting_fields()],
 				'x-frame-options'		=>['title'=>'Frame嵌入',		'mp'=>'P__N3Srj-4WvZdkLORlBRg',	'options'=>$x_frame_options],
@@ -92,7 +92,7 @@ class WPJAM_Basic extends WPJAM_Option_Model{
 				$field['fields']	= self::parse_fields($field['fields']);
 			}
 
-			$mp = array_pull($field, 'mp');
+			$mp = wpjam_pull($field, 'mp');
 
 			if($mp){
 				$link	= 'https://mp.weixin.qq.com/s/'.$mp;
@@ -536,7 +536,7 @@ class WPJAM_Google_Font extends WPJAM_Register{
 		$name		= wpjam_basic_get_setting('google_fonts');
 		$object		= self::get($name);
 		$search		= self::get_search();
-		$replace	= $name == 'custom' ? array_map(fn($k, $v) => str_replace(['http://','https://'], '//', wpjam_basic_get_setting($k) ?: $v), array_keys($search), $search) : ($object ? $object->replace : '');
+		$replace	= $name == 'custom' ? wpjam_map($search, fn($v, $k) => str_replace(['http://','https://'], '//', wpjam_basic_get_setting($k) ?: $v)) : ($object ? $object->replace : '');
 
 		return $replace && count($replace) == 4 ? str_replace($search, $replace, $html) : $html;
 	}

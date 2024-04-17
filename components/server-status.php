@@ -193,7 +193,7 @@ class WPJAM_Server_Status{
 
 		$items	= [];
 
-		foreach($wp_object_cache->get_mc()->getStats() as $key => $details){
+		foreach($wp_object_cache->get_stats() as $key => $details){
 			// $items[]	= ['title'=>'Memcached进程ID',	'value'=>$details['pid']];
 			$items[]	= ['title'=>'Memcached地址',		'value'=>$key];
 			$items[]	= ['title'=>'Memcached版本',		'value'=>$details['version']];
@@ -209,6 +209,51 @@ class WPJAM_Server_Status{
 			$items[]	= ['title'=>'总设置请求次数',		'value'=>$details['cmd_set']];
 			$items[]	= ['title'=>'Item平均大小',		'value'=>size_format($details['bytes']/$details['curr_items'])];
 		}
+
+		$options = [
+			Memcached::OPT_COMPRESSION => 'OPT_COMPRESSION',
+			Memcached::OPT_COMPRESSION_TYPE => 'OPT_COMPRESSION_TYPE',
+			Memcached::OPT_SERIALIZER => 'OPT_SERIALIZER',
+			Memcached::OPT_PREFIX_KEY => 'OPT_PREFIX_KEY',
+			Memcached::OPT_HASH => 'OPT_HASH',
+			Memcached::OPT_DISTRIBUTION => 'OPT_DISTRIBUTION',
+			Memcached::OPT_LIBKETAMA_COMPATIBLE => 'OPT_LIBKETAMA_COMPATIBLE',
+			Memcached::OPT_LIBKETAMA_HASH => 'OPT_LIBKETAMA_HASH',
+			Memcached::OPT_TCP_KEEPALIVE => 'OPT_TCP_KEEPALIVE',
+			Memcached::OPT_BUFFER_WRITES => 'OPT_BUFFER_WRITES',
+			Memcached::OPT_BINARY_PROTOCOL => 'OPT_BINARY_PROTOCOL',
+			Memcached::OPT_NO_BLOCK => 'OPT_NO_BLOCK',
+			Memcached::OPT_TCP_NODELAY => 'OPT_TCP_NODELAY',
+			Memcached::OPT_SOCKET_RECV_SIZE => 'OPT_SOCKET_RECV_SIZE',
+			Memcached::OPT_SOCKET_SEND_SIZE => 'OPT_SOCKET_SEND_SIZE',
+			Memcached::OPT_CONNECT_TIMEOUT => 'OPT_CONNECT_TIMEOUT',
+			Memcached::OPT_RETRY_TIMEOUT => 'OPT_RETRY_TIMEOUT',
+			Memcached::OPT_DEAD_TIMEOUT => 'OPT_DEAD_TIMEOUT',
+			Memcached::OPT_SEND_TIMEOUT => 'OPT_SEND_TIMEOUT',
+			Memcached::OPT_RECV_TIMEOUT => 'OPT_RECV_TIMEOUT',
+			Memcached::OPT_POLL_TIMEOUT => 'OPT_POLL_TIMEOUT',
+			Memcached::OPT_CACHE_LOOKUPS => 'OPT_CACHE_LOOKUPS',
+			Memcached::OPT_SERVER_FAILURE_LIMIT => 'OPT_SERVER_FAILURE_LIMIT',
+			Memcached::OPT_AUTO_EJECT_HOSTS => 'OPT_AUTO_EJECT_HOSTS',
+			Memcached::OPT_HASH_WITH_PREFIX_KEY => 'OPT_HASH_WITH_PREFIX_KEY',
+			Memcached::OPT_NOREPLY => 'OPT_NOREPLY',
+			Memcached::OPT_SORT_HOSTS => 'OPT_SORT_HOSTS',
+			Memcached::OPT_VERIFY_KEY => 'OPT_VERIFY_KEY',
+			Memcached::OPT_USE_UDP => 'OPT_USE_UDP',
+			Memcached::OPT_NUMBER_OF_REPLICAS => 'OPT_NUMBER_OF_REPLICAS',
+			Memcached::OPT_RANDOMIZE_REPLICA_READ => 'OPT_RANDOMIZE_REPLICA_READ',
+			Memcached::OPT_REMOVE_FAILED_SERVERS => 'OPT_REMOVE_FAILED_SERVERS',
+			Memcached::OPT_SERVER_TIMEOUT_LIMIT => 'OPT_SERVER_TIMEOUT_LIMIT',
+		];
+
+		$result	= [];
+		$mc		= $wp_object_cache->get_mc();
+
+		foreach($options as $option => $name){
+			$result[$name]	= $mc->getOption($option);
+		}
+
+		// wpjam_print_r($result);
 
 		self::output($items);
 	}
@@ -234,7 +279,7 @@ class WPJAM_Server_Status{
 
 		$items	= [];
 
-		foreach($wp_object_cache->get_mc('defaul')->getStats() as $key => $details){
+		foreach($wp_object_cache->get_stats() as $key => $details){
 			$counts	= [
 				['label'=>'命中次数',	'count'=>$details['get_hits']],
 				['label'=>'未命中次数',	'count'=>$details['get_misses']]
@@ -258,7 +303,7 @@ class WPJAM_Server_Status{
 	public static function memcached_usage_efficiency_widget(){
 		global $wp_object_cache;
 
-		foreach($wp_object_cache->get_mc('defaul')->getStats() as $key => $details){
+		foreach($wp_object_cache->get_stats() as $key => $details){
 			self::output([
 				['title'=>'每秒命中次数',		'value'=>round($details['get_hits']/$details['uptime'],2)],
 				['title'=>'每秒未命中次数',	'value'=>round($details['get_misses']/$details['uptime'],2)],

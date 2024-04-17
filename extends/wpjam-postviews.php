@@ -103,19 +103,27 @@ class WPJAM_Postviews{
 		return true;
 	}
 
-	public static function api_callback(){
+	public static function api_callback($data){
+		$post_id	= (int)$data['post_id'];
+		$views		= wpjam_get_post_views($post_id);
+
 		if($_SERVER['REQUEST_METHOD'] == 'POST'){
-			$post_id	= (int)wpjam_get_post_parameter('post_id',	['required'=>true, 'validate_callback'=>['WPJAM_Post','validate']]);
-			$views		= (int)wpjam_get_post_parameter('views', 	['required'=>true]);
-			$views		= $views + wpjam_get_post_views($post_id);
+			$views	= $views + (int)$data['views'];
 
 			update_post_meta($post_id, 'views', $views);
-		}else{
-			$post_id	= (int)wpjam_get_parameter('post_id',	['required'=>true, 'validate_callback'=>['WPJAM_Post','validate']]);
-			$views		= wpjam_get_post_views($post_id);
 		}
 
 		return ['views'=>$views];
+	}
+
+	public static function api_fields(){
+		$fields	= ['post_id'=>['required'=>true, 'validate_callback'=>['WPJAM_Post','validate']]];
+
+		if($_SERVER['REQUEST_METHOD'] == 'POST'){
+			$fields['views']	= ['required'=>true];
+		}
+
+		return $fields;
 	}
 
 	public static function get_rewrite_rule(){
@@ -162,7 +170,8 @@ class WPJAM_Postviews{
 
 		wpjam_register_json('post.views',	[
 			'callback'	=> [self::class, 'api_callback'],
-			'grant' => isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] == 'POST',
+			'fields'	=> [self::class, 'api_fields'],
+			'grant'		=> $_SERVER['REQUEST_METHOD'] == 'POST'
 		]);
 	}
 

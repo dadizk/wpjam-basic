@@ -194,7 +194,7 @@ class WPJAM_User{
 				// 'avatarurl'		=> '',
 			]);
 
-			if(!array_pull($args, 'users_can_register', get_option('users_can_register'))){
+			if(!wpjam_pull($args, 'users_can_register', get_option('users_can_register'))){
 				return new WP_Error('registration_closed', '用户注册关闭，请联系管理员手动添加！');
 			}
 
@@ -670,7 +670,7 @@ class WPJAM_User_Signup extends WPJAM_Register{
 	// }
 
 	public static function create($name, $args){
-		$model	= array_pull($args, 'model');
+		$model	= wpjam_pull($args, 'model');
 		$type	= array_get($args, 'type') ?: $name;
 		$appid	= array_get($args, 'appid');
 

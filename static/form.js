@@ -47,25 +47,20 @@ jQuery(function($){
 				});
 
 				uploader.bind('UploadProgress', function(up, file){
-					let up_container = $(up.settings.container);
-
-					up_container.find('.progress').show();
-					up_container.find('.bar').width((200 * file.loaded) / file.size);
-					up_container.find('.percent').html(file.percent + '%');
+					$(up.settings.container).find('.progress').show().end().find('.bar').width((200 * file.loaded) / file.size).end().find('.percent').html(file.percent + '%');
 				});
 
 				uploader.bind('FileUploaded', function(up, file, result){
-					let response		= JSON.parse(result.response);
-					let up_container	= $(up.settings.container);
+					let response	= JSON.parse(result.response);
 
-					up_container.find('.progress').hide();
-					up_container.find('.button').show();
+					$(up.settings.container).find('.progress').hide().end().find('.button').show();
 
 					if(response.errcode){
 						alert(response.errmsg);
 					}else{
-						up_container.find('.field-key-'+up.settings.file_data_name).addClass('hidden').val(response.file);
-						up_container.find('.query-title').find('.query-text').text(response.file.split('/').pop());
+						let query_title	= $(up.settings.container).find('.field-key-'+up.settings.file_data_name).addClass('hidden').val(response.path).end().find('.query-title');
+
+						query_title.html(() => query_title.children().prop('outerHTML')+response.path.split('/').pop());
 					}
 				});
 
@@ -118,7 +113,7 @@ jQuery(function($){
 					let data	= $(this).data('show_if');
 
 					if(data.compare || !data.query_arg){
-						let show	= $.wpjam_compare(val, data);
+						let show	= val === null ? false : $.wpjam_compare(val, data);
 
 						if(show){
 							$(this).removeClass('hidden');
@@ -271,17 +266,20 @@ jQuery(function($){
 		},
 
 		wpjam_color: function(){
-			$(this).attr('type', 'text').wpColorPicker();
-			$(this).next('.description').appendTo($(this).parents('.wp-picker-container'));
+			this.each(function(){
+				$(this).attr('type', 'text').val($(this).attr('value')).wpColorPicker().next('.description').appendTo($(this).parents('.wp-picker-container'));
+			});
 		},
 
 		wpjam_editor: function(){
 			if(this.length){
 				if(wp.editor){
-					let id	= $(this).attr('id');
+					this.each(function(){
+						let id	= $(this).attr('id');
 
-					wp.editor.remove(id);
-					wp.editor.initialize(id, $(this).data('editor'));
+						wp.editor.remove(id);
+						wp.editor.initialize(id, $(this).data('editor'));
+					});
 
 					$(this).removeAttr('data-editor').removeData('editor');
 				}else{
@@ -359,8 +357,20 @@ jQuery(function($){
 		wpjam_compare: function(a, data){
 			let compare	= data.compare;
 
-			if(a === null && !compare && data.hasOwnProperty('if_null')){
-				return data.if_null;
+			if(compare){
+				compare	= compare.toUpperCase();
+
+				let antonyms	= {
+					'!=': '=',
+					'<=': '>',
+					'>=': '<',
+					'NOT IN': 'IN',
+					'NOT BETWEEN': 'BETWEEN'
+				};
+
+				if(antonyms.hasOwnProperty(compare)){
+					return !$.wpjam_compare(a, $.extend({}, data, {'compare' : antonyms[compare]}));
+				}
 			}
 
 			let b		= data.value;
@@ -376,30 +386,36 @@ jQuery(function($){
 
 			if(!compare){
 				compare	= Array.isArray(b) ? 'IN' : '=';
+			}
+
+			if(['IN', 'BETWEEN'].indexOf(compare) != -1){
+				if(!Array.isArray(b)){
+					b	= b.split(/[\s,]+/);
+				}
+
+				if(!Array.isArray(a) && b.length === 1) {
+					b	= b[0];
+
+					compare	= '=';
+				}else{
+					b	= b.map(String);
+				}
 			}else{
-				compare	= compare.toUpperCase();
+				if(typeof b === 'string'){
+					b	= b.trim();
+				}
 			}
 
 			if(compare == '='){
 				return a == b;
-			}else if(compare == '!='){
-				return a != b;
 			}else if(compare == '>'){
 				return a > b;
-			}else if(compare == '>='){
-				return a >= b;
 			}else if(compare == '<'){
 				return a < b;
-			}else if(compare == '<='){
-				return a <= b;
 			}else if(compare == 'IN'){
 				return b.indexOf(a) != -1;
-			}else if(compare == 'NOT IN'){
-				return b.indexOf(a) == -1;
 			}else if(compare == 'BETWEEN'){
 				return a >= b[0] && a <= b[1];
-			}else if(compare == 'NOT BETWEEN'){
-				return a < b[0] || a > b[1];
 			}else{
 				return false;
 			}

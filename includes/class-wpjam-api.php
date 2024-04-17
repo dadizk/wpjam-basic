@@ -83,8 +83,8 @@ class WPJAM_Route{
 		if($module){
 			remove_action('template_redirect',	'redirect_canonical');
 
-			$action	= $wp->query_vars['action'] ?? '';
 			$item	= wpjam_get_item('route', $module);
+			$action	= $wp->query_vars['action'] ?? '';
 
 			if($item){
 				if(!empty($item['callback']) && is_callable($item['callback'])){
@@ -131,7 +131,7 @@ class WPJAM_Route{
 		if(!is_array($args) || wp_is_numeric_array($args)){
 			$args	= is_callable($args) ? ['callback'=>$args] : (array)$args;
 		}elseif(!empty($args['model'])){
-			$model	= array_pull($args, 'model');
+			$model	= wpjam_pull($args, 'model');
 
 			foreach(['callback'=>'redirect', 'rewrite_rule'=>'get_rewrite_rule'] as $key => $method){
 				if(empty($args[$key]) && method_exists($model, $method)){
@@ -146,6 +146,7 @@ class WPJAM_Route{
 
 class WPJAM_JSON extends WPJAM_Register{
 	public function response(){
+		$method		= $this->method ?: $_SERVER['REQUEST_METHOD'];
 		$response	= apply_filters('wpjam_pre_json', [], $this->args, $this->name);
 		$response	= wpjam_throw_if_error($response);
 		$response	= array_merge($response, [
@@ -153,14 +154,18 @@ class WPJAM_JSON extends WPJAM_Register{
 			'current_user'	=> wpjam_try('wpjam_get_current_user', $this->pull('auth'))
 		]);
 
-		if($_SERVER['REQUEST_METHOD'] != 'POST' && !str_ends_with($this->name, '.config')){
+		if($method != 'POST' && !str_ends_with($this->name, '.config')){
 			$response	+= wp_array_slice_assoc($this, ['page_title', 'share_title', 'share_image']);
 		}
 
+		if($this->fields){
+			$fields	= $this->fields;
+			$fields	= is_callable($fields) ? wpjam_try($fields, $this->name) : $fields;
+			$data	= wpjam_fields($fields)->get_parameter($method);
+		}
+
 		if($this->modules){
-			$modules	= $this->modules;
-			$modules	= is_callable($modules) ? call_user_func($modules, $this->name) : $modules;
-			$modules	= wp_is_numeric_array($modules) ? $modules : [$modules];
+			$modules	= self::parse_modules($this->modules, $this->name);
 			$results	= array_map([self::class, 'parse_module'], $modules);
 		}else{
 			$results	= [];
@@ -168,7 +173,7 @@ class WPJAM_JSON extends WPJAM_Register{
 
 			if($callback){
 				if(is_callable($callback)){
-					$results[]	= wpjam_try($callback, $this->args, $this->name);
+					$results[]	= wpjam_try($callback, ($this->fields ? $data : $this->args), $this->name);
 				}
 			}elseif($this->template){
 				if(is_file($this->template)){
@@ -184,13 +189,13 @@ class WPJAM_JSON extends WPJAM_Register{
 
 			if(is_array($result)){
 				$attr		= wp_array_slice_assoc($response, ['page_title', 'share_title', 'share_image']);
-				$response	= array_merge($response, array_except($result, array_keys(array_filter($attr))));
+				$response	= array_merge($response, array_diff_key($result, array_filter($attr)));
 			}
 		}
 
 		$response	= apply_filters('wpjam_json', $response, $this->args, $this->name);
 
-		if($_SERVER['REQUEST_METHOD'] != 'POST' && !str_ends_with($this->name, '.config')){
+		if($method != 'POST' && !str_ends_with($this->name, '.config')){
 			foreach(['page_title', 'share_title']  as $title_key){
 				if(empty($response[$title_key])){
 					$response[$title_key]	= html_entity_decode(wp_get_document_title());
@@ -203,6 +208,12 @@ class WPJAM_JSON extends WPJAM_Register{
 		}
 
 		return $response;
+	}
+
+	public static function parse_modules($modules, $name){
+		$modules	= is_callable($modules) ? call_user_func($modules, $name) : $modules;
+
+		return wp_is_numeric_array($modules) ? $modules : [$modules];
 	}
 
 	public static function parse_module($module){
@@ -237,6 +248,10 @@ class WPJAM_JSON extends WPJAM_Register{
 			return;
 		}
 
+		$part	= wp_is_jsonp_request() ? '_jsonp' : (wp_is_json_request() ? '_json' : '');
+
+		add_filter('wp_die'.$part.'_handler',	[self::class, 'filter_die_handler']);
+
 		$name	= wpjam_remove_prefix($action, 'mag.');
 		$name	= wpjam_remove_prefix($name, 'mag.');	// 兼容
 		$name	= str_replace('/', '.', $name);
@@ -254,19 +269,22 @@ class WPJAM_JSON extends WPJAM_Register{
 
 		$object	= self::get($name);
 
-		if($object){
-			if(is_wp_error($object)){
-				self::send($object);
-			}
-
-			if($object->defaults){
-				wpjam_set_current_var('defaults', $object->defaults);
-			}
-
-			self::send(wpjam_catch([$object, 'response']));
-		}else{
+		if(!$object){
 			wp_die('接口未定义！', 'invalid_api');
 		}
+
+		if(is_wp_error($object)){
+			self::send($object);
+		}
+
+		self::add_module_parser('post_type',	['WPJAM_Posts', 'parse_json_module']);
+		self::add_module_parser('taxonomy',		['WPJAM_Terms', 'parse_json_module']);
+		self::add_module_parser('setting',		['WPJAM_Setting', 'parse_json_module']);
+		self::add_module_parser('media',		['WPJAM_Posts', 'parse_media_json_module']);
+		self::add_module_parser('data_type',	['WPJAM_Data_Type', 'parse_json_module']);
+		self::add_module_parser('config',		'wpjam_get_config');
+
+		self::send(wpjam_catch([$object, 'response']));
 	}
 
 	public static function send($data=[], $status_code=null){
@@ -321,6 +339,10 @@ class WPJAM_JSON extends WPJAM_Register{
 		}
 
 		return $result;
+	}
+
+	public static function filter_die_handler(){
+		return fn($message, $title='', $code=0) => self::send(WPJAM_Error::convert($message, $title, $code));
 	}
 
 	public static function get_current($output='name'){
@@ -424,60 +446,103 @@ class WPJAM_Error extends WPJAM_Model{
 		return $data;
 	}
 
-	public static function add_setting($code, $message, $modal=[]){
-		$object = wpjam_get_items_object('error');
+	public static function if($data, $err=[]){
+		$err	= wp_parse_args($err,  [
+			'errcode'	=> 'errcode',
+			'errmsg'	=> 'errmsg',
+			'detail'	=> 'detail',
+			'success'	=> '0',
+		]);
 
-		if(!$object->get_items()){
-			add_action('wp_error_added', [self::class, 'on_wp_error_added'], 10, 4);
+		$code	= wpjam_pull($data, $err['errcode']);
+
+		if($code && $code != $err['success']){
+			$msg	= wpjam_pull($data, $err['errmsg']);
+			$detail	= wpjam_pull($data, $err['detail']);
+			$detail	= is_null($detail) ? array_filter($data) : $detail;
+
+			return new WP_Error($code, $msg, $detail);
 		}
 
-		$object->add_item($code, ['message'=>$message, 'modal'=>$modal]);
-	}
-
-	public static function get_setting($code){
-		$object = wpjam_get_items_object('error');
-		$item	= $object->get_item($code);
-
-		if($item && $item['message']){
-			return $object->get_item($code);
-		}
+		return $data;
 	}
 
 	public static function convert($message, $title='', $code=0){
-		$modal	= [];
-
 		if(is_wp_error($message)){
-			$wp_error	= $message;
-		}else{
-			if($code){
-				if($title){
-					$modal	= ['title'=>$title, 'message'=>$message];
-				}
-			}else{
-				$code	= $title;
+			return $message;
+		}
 
-				if(!$code){
-					if(is_scalar($message) && self::get_setting($message)){
-						$code		= $message;
-						$message	= '';
-					}else{
-						$code		= 'error';
-					}
-				}
+		if($code){
+			$detail	= $title ? ['modal'=>['title'=>$title, 'content'=>$message]] : [];
+
+			return new WP_Error($code, $message, $detail);
+		}
+
+		$code	= $title;
+
+		if(!$code){
+			if(is_scalar($message) && self::get_setting($message)){
+				[$code, $message]	= [$message, ''];
+			}else{
+				$code	= 'error';
 			}
 		}
 
-		$wp_error	= new WP_Error($code, $message);
-
-		if($modal){
-			$wp_error->add_data(['modal'=>$modal]);
-		}
-
-		return $wp_error;
+		return new WP_Error($code, $message);
 	}
 
-	public static function wp_die_handler($message, $title='', $code=0){
-		wpjam_send_json(self::convert($message, $title, $code));
+	public static function callback($args, $code){
+		if($code == 'undefined_method'){
+			if(count($args) >= 2){
+				return sprintf('「%s」%s未定义', ...$args);
+			}elseif(count($args) == 1){
+				return sprintf('%s方法未定义', ...$args);
+			}
+		}elseif($code == 'quota_exceeded'){
+			if(count($args) >= 2){
+				return sprintf('%s超过上限：%s', ...$args);
+			}elseif(count($args) == 1){
+				return sprintf('%s超过上限', ...$args);
+			}else{
+				return '超过上限';
+			}
+		}
+	}
+
+	public static function get_setting($code){
+		$item	= wpjam_get_item('error', $code);
+
+		if($item && $item['message']){
+			return $item;
+		}
+	}
+
+	public static function add_setting($code, $message, $modal=[]){
+		wpjam_add_item('error', $code, ['message'=>$message, 'modal'=>$modal]);
+	}
+
+	public static function on_loaded(){
+		add_action('wp_error_added', [self::class, 'on_wp_error_added'], 10, 4);
+
+		foreach([
+			['invalid_post_type',	'无效的文章类型'],
+			['invalid_taxonomy',	'无效的分类模式'],
+			['invalid_menu_page',	'页面%s「%s」未定义。'],
+			['invalid_item_key',	'「%s」已存在，无法%s。'],
+			['invalid_page_key',	'无效的%s页面。'],
+			['invalid_name',		'%s不能为纯数字。'],
+			['invalid_nonce',		'验证失败，请刷新重试。'],
+			['invalid_code',		'验证码错误。'],
+			['invalid_password',	'两次输入的密码不一致。'],
+			['incorrect_password',	'密码错误。'],
+			['bad_authentication',	'无权限'],
+			['access_denied',		'操作受限'],
+			['value_required',		'%s的值为空或无效。'],
+			['undefined_method',	[self::class, 'callback']],
+			['quota_exceeded',		[self::class, 'callback']],
+		] as $args){
+			self::add_setting(...$args);
+		}
 	}
 
 	public static function on_wp_error_added($code, $message, $data, $wp_error){
@@ -554,28 +619,6 @@ class WPJAM_Error extends WPJAM_Model{
 			}
 		}
 	}
-
-	public static function filter_wp_die_handler(){
-		return [self::class, 'wp_die_handler'];
-	}
-
-	public static function callback($args, $code){
-		if($code == 'undefined_method'){
-			if(count($args) >= 2){
-				return sprintf('「%s」%s未定义', ...$args);
-			}elseif(count($args) == 1){
-				return sprintf('%s方法未定义', ...$args);
-			}
-		}elseif($code == 'quota_exceeded'){
-			if(count($args) >= 2){
-				return sprintf('%s超过上限：%s', ...$args);
-			}elseif(count($args) == 1){
-				return sprintf('%s超过上限', ...$args);
-			}else{
-				return '超过上限';
-			}
-		}
-	}
 }
 
 class WPJAM_Exception extends Exception{
@@ -611,259 +654,206 @@ class WPJAM_Exception extends Exception{
 	}
 }
 
-class WPJAM_Parameter extends WPJAM_Singleton{
-	protected $_input;
+class WPJAM_Parameter{
+	public static function get_value($name, $args=[], $method=''){
+		if(is_array($name)){
+			if(!$name){
+				return [];
+			}
 
-	public function get_value($name, $args){
-		$this->args	= $args;
-
-		$value	= $this->get_by_name($name);
-		$value	??= $this->get_fallback($name);
-		$result	= $this->validate_value($value, $name);
-
-		if(is_wp_error($result)){
-			return $this->send === false ? $result : wpjam_send_json($result);
+			if(wp_is_numeric_array($name)){
+				return wpjam_fill($name, fn($n) => self::get_value($n, $args, $method));
+			}else{
+				return wpjam_map($name, fn($v, $n) => self::get_value($n, $v, $method));
+			}
 		}
 
-		return $this->sanitize_value($value);
-	}
-
-	protected function get_by_name($name){
-		$method	= $this->method ?: 'GET';
+		$method	= $method ?: (array_get($args, 'method') ?: 'GET');
 		$method	= strtoupper($method);
-
-		if($method == 'POST'){
-			$data	= $_POST;
-		}elseif($method == 'REQUEST'){
-			$data	= $_REQUEST;
-		}else{
-			$data	= $_GET;
-		}
+		$value	= self::get_by_name($name, $method);
 
 		if($name){
-			if(isset($data[$name])){
-				return wp_unslash($data[$name]);
-			}else{
-				if($_POST || $method == 'GET'){
+			if(is_null($value) && !empty($args['fallback'])){
+				$value	= self::get_by_name($args['fallback'], $method);
+			}
+
+			if(is_null($value)){
+				if(isset($args['default'])){
+					$value		= $args['default'];
+				}else{
+					$defaults	= wpjam_get_current_var('defaults') ?: [];
+					$value		= $defaults[$name] ?? null;
+				}
+			}
+
+			$args	= array_except($args, ['method', 'fallback', 'default']);
+
+			if($args){
+				$args['key']	= $name;
+				$args['type']	??= '';
+
+				if($args['type'] == 'int'){	// 兼容
+					$args['type']	= 'number';
+				}
+
+				$field	= wpjam_field($args);
+
+				if(!$args['type']){
+					$field->set_schema(false);
+				}
+
+				$value	= wpjam_catch([$field, 'validate'], $value, 'parameter');
+
+				if(is_wp_error($value) && array_get($args, 'send') !== false){
+					wpjam_send_json($value);
+				}
+			}
+		}
+
+		return $value;
+	}
+
+	private static function get_by_name($name, $method){
+		if($method == 'DATA'){
+			if($name && isset($_GET[$name])){
+				return wp_unslash($_GET[$name]);
+			}
+
+			$data	= self::get_data();
+		}else{
+			$data	= ['POST'=>$_POST, 'REQUEST'=>$_REQUEST][$method] ?? $_GET;
+
+			if($name){
+				if(isset($data[$name])){
+					return wp_unslash($data[$name]);
+				}
+
+				if($_POST || !in_array($method, ['POST', 'REQUEST'])){
 					return null;
 				}
-			}
-		}else{
-			if($data || in_array($method, ['GET', 'REQUEST'])){
-				return wp_unslash($data);
-			}
-		}
-
-		if(is_null($this->_input)){
-			$input	= file_get_contents('php://input');
-			$input	= is_string($input) ? @wpjam_json_decode($input) : $input;
-
-			$this->_input	= is_array($input) ? $input : [];
-		}
-
-		return $name ? ($this->_input[$name] ?? null) : $this->_input;
-	}
-
-	protected function get_fallback($name){
-		if($this->fallback){
-			foreach(array_filter((array)$this->fallback) as $fallback){
-				$value	= $this->get_by_name($fallback);
-
-				if(!is_null($value)){
-					return $value;
+			}else{
+				if($data || in_array($method, ['GET', 'REQUEST'])){
+					return wp_unslash($data);
 				}
 			}
+
+			$data	= self::get_input();
 		}
 
-		if(isset($this->default)){
-			return $this->default;
-		}else{
-			$defaults	= wpjam_get_current_var('defaults') ?: [];
-
-			return $defaults[$name] ?? null;
-		}
+		return $name ? ($data[$name] ?? null) : $data;
 	}
 
-	protected function validate_value($value, $name=''){
-		if($this->required){
-			if(is_null($value)){
-				return new WP_Error('missing_parameter', '缺少参数：'.$name);
-			}
+	private static function get_input(){
+		static $_input;
+
+		if(!isset($_input)){
+			$input	= file_get_contents('php://input');
+			$input	= is_string($input) ? @wpjam_json_decode($input) : $input;
+			$_input	= is_array($input) ? $input : [];
 		}
 
-		if($this->length){
-			if(is_numeric($this->length) && mb_strlen($value) < $this->length){
-				return new WP_Error('invalid_parameter', [$name]);
-			}
-		}
-
-		$result	= parent::validate_value($value);
-
-		if($result === false){
-			return new WP_Error('invalid_parameter', [$name]);
-		}elseif(is_wp_error($result)){
-			return $result;
-		}
-
-		return true;
+		return $_input;
 	}
 
-	protected function sanitize_value($value){
-		if($this->type == 'int' && !is_null($value)){
-			return (int)$value;
-		}
+	private static function get_data(){
+		static $_data;
 
-		return parent::sanitize_value($value);
+		return $_data	??= array_reduce(['defaults', 'data'], fn($data, $k) => wpjam_merge($data, wp_parse_args(self::get_by_name($k, 'POST') ?? [])), []);
 	}
 }
 
-class WPJAM_Data_Parameter extends WPJAM_Parameter{
-	protected $_data;
-
-	protected function get_by_name($name){
-		if($name && isset($_GET[$name])){
-			return wp_unslash($_GET[$name]);
-		}
-
-		if(is_null($this->_data)){
-			$args			= ['sanitize_callback'=>'wp_parse_args', 'default'=>[]];
-			$this->_data	= $this->sandbox(fn() => merge_deep(wpjam_get_post_parameter('defaults', $args), wpjam_get_post_parameter('data', $args)));
-		}
-
-		return $name ? ($this->_data[$name] ?? null) : $this->_data;
-	}
-}
-
-class WPJAM_Request extends WPJAM_Singleton{
-	public function request($url, $args=[], $err_args=[], &$headers=null){
-		$this->args	= wp_parse_args($args, [
-			'body'			=> [],
-			'headers'		=> [],
-			'sslverify'		=> false,
-			'blocking'		=> true,	// 如果不需要立刻知道结果，可以设置为 false
-			'stream'		=> false,	// 如果是保存远程的文件，这里需要设置为 true
-			'filename'		=> null,	// 设置保存下来文件的路径和名字
-			// 'headers'	=> ['Accept-Encoding'=>'gzip;'],	//使用压缩传输数据
-			// 'compress'	=> false,
+class WPJAM_Request{
+	public static function request($url, $args=[], $err=[]){
+		$args	= wp_parse_args($args, [
+			'body'		=> [],
+			'headers'	=> [],
+			'sslverify'	=> false,
+			'stream'	=> false,
 		]);
 
-		$this->method	= $this->method ? strtoupper($this->method) : ($this->body ? 'POST' : 'GET');
+		$method	= strtoupper(wpjam_pull($args, 'method', '')) ?: ($args['body'] ? 'POST' : 'GET');
 
-		if($this->method == 'GET'){
-			$response	= wp_remote_get($url, $this->args);
-		}elseif($this->method == 'FILE'){
-			$this->curl	??= new WP_Http_Curl();
-			$response	= $this->curl->request($url, wp_parse_args($this->args, [
-				'method'			=> $this->body ? 'POST' : 'GET',
+		if($method == 'GET'){
+			$response	= wp_remote_get($url, $args);
+		}elseif($method == 'FILE'){
+			$response	= (new WP_Http_Curl())->request($url, wp_parse_args($args, [
+				'method'			=> $args['body'] ? 'POST' : 'GET',
 				'sslcertificates'	=> ABSPATH.WPINC.'/certificates/ca-bundle.crt',
 				'user-agent'		=> 'WordPress',
 				'decompress'		=> true,
 			]));
 		}else{
-			$encode	= $this->pull('json_encode_required', $this->pull('need_json_encode'));
-
-			if($encode){
-				if(is_array($this->body)){
-					$this->body	= $this->body ?: new stdClass;
-					$this->body	= wpjam_json_encode($this->body);
-				}
-
-				if($this->method == 'POST' && empty($this->headers['Content-Type'])){
-					$this->headers	+= ['Content-Type'=>'application/json'];
-				}
-			}
-
-			$response	= wp_remote_request($url, $this->args);
+			$response	= wp_remote_request($url, array_merge(self::encode($args), ['method'=>$method]));
 		}
 
-		if(wpjam_doing_debug()){
-			print_r($response);
-		}
+		$args['url']	= $url;
 
 		if(is_wp_error($response)){
-			trigger_error($url."\n".$response->get_error_code().' : '.$response->get_error_message()."\n".var_export($this->body,true));
-			return $response;
+			return self::log($response, $args);
 		}
 
-		$errcode	= $response['response']['code'] ?? 0;
+		$code	= $response['response']['code'] ?? 0;
 
-		if($errcode && $errcode != 200){
-			return new WP_Error($errcode, '远程服务器错误：'.$errcode.' - '.$response['response']['message']);
+		if($code && $code != 200){
+			return new WP_Error($code, '远程服务器错误：'.$code.' - '.$response['response']['message']);
 		}
 
-		if(!$this->blocking){
-			return true;
+		$body	= &$response['body'];
+
+		if($body && !$args['stream']){
+			if(str_contains(wp_remote_retrieve_header($response, 'content-disposition'), 'attachment;')){
+				$body	= wpjam_bits($body);
+			}else{
+				$body	= self::decode($body, $args, $err);
+			}
 		}
 
-		$this->url	= $url;
-		$body		= $response['body'];
-		$headers	= $response['headers'];
-
-		return $this->decode($body, $headers, $err_args);
+		return array_get($args, 'response') ? $response : $body;
 	}
 
-	public function decode($body, $headers, $err_args=[]){
-		$disposition	= $headers['content-disposition'] ?? '';
-		$content_type	= $headers['content-type'] ?? '';
-		$content_type	= is_array($content_type) ? implode(' ', $content_type) : $content_type;
+	private static function encode($args){
+		$encode	= wpjam_pull($args, 'json_encode_required', wpjam_pull($args, 'need_json_encode'));
 
-		if($disposition && strpos($disposition, 'attachment;') !== false){
-			if(!$this->stream){
-				if(!$content_type){
-					$content_type	= finfo_buffer(finfo_open(), $body, FILEINFO_MIME_TYPE);
-				}
-
-				return 'data:'.$content_type.';base64, '.base64_encode($body);
+		if($encode){
+			if(is_array($args['body'])){
+				$args['body']	= wpjam_json_encode($args['body'] ?: new stdClass);
 			}
 
-			return $body;
-		}else{
-			if($content_type && strpos($content_type, '/json')){
-				$decode	= true;
-			}else{
-				$decode	= $this->pull('json_decode_required', $this->pull('need_json_decode', ($this->stream ? false : true)));
-			}
-
-			if($decode){
-				if($this->stream){
-					$body	= file_get_contents($this->filename);
-				}
-
-				if(empty($body)){
-					trigger_error(var_export($body, true).var_export($headers, true));
-				}else{
-					$body	= wpjam_json_decode($body);
-
-					if(is_wp_error($body)){
-						return $body;
-					}
-				}
+			if(empty($args['headers']['Content-Type'])){
+				$args['headers']['Content-Type']	= 'application/json';
 			}
 		}
 
-		if(is_array($body)){
-			$err_args	= wp_parse_args($err_args,  [
-				'errcode'	=> 'errcode',
-				'errmsg'	=> 'errmsg',
-				'detail'	=> 'detail',
-				'success'	=> '0',
-			]);
+		return $args;
+	}
 
-			$errcode	= array_pull($body, $err_args['errcode']);
-		
-			if($errcode && $errcode != $err_args['success']){
-				$errmsg	= array_pull($body, $err_args['errmsg']);
-				$detail	= array_pull($body, $err_args['detail']);
-				$detail	= is_null($detail) ? array_filter($body) : $detail;
+	private static function decode($body, $args=[], $err=[]){
+		if(wpjam_pull($args, 'json_decode') !== false && str_starts_with($body, '{') && str_ends_with($body, '}')){
+			$decoded	= wpjam_json_decode($body);
 
-				if(apply_filters('wpjam_http_response_error_debug', true, $errcode, $errmsg, $detail)){
-					trigger_error($this->url."\n".$errcode.' : '.$errmsg."\n".($detail ? var_export($detail,true)."\n" : '').var_export($this->body,true));
+			if(!is_wp_error($decoded)){
+				$body	= WPJAM_Error::if($decoded, $err);
+
+				if(is_wp_error($body)){
+					self::log($body, $args);
 				}
-
-				return new WP_Error($errcode, $errmsg, $detail);
 			}
 		}
 
 		return $body;
+	}
+
+	private static function log($error, $args=[]){
+		$code	= $error->get_error_code();
+		$msg	= $error->get_error_message();
+
+		if(apply_filters('wpjam_http_response_error_debug', true, $code, $msg)){
+			$detail	= $error->get_error_data();
+			$detail	= $detail ? var_export($detail, true)."\n" : '';
+
+			trigger_error($args['url']."\n".$code.' : '.$msg."\n".$detail.var_export($args['body'], true));
+		}
+
+		return $error;
 	}
 }

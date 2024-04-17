@@ -89,7 +89,7 @@ class WPJAM_Role{
 		return $items;
 	}
 
-	public static function capability_callback($user_id, $args){
+	public static function map_meta_cap($user_id, $args){
 		if(isset($args[0]) && $args[0] === 'administrator' && (empty($args[1]) || $args[1] == 'delete')){
 			return ['do_not_allow'];
 		}
@@ -206,7 +206,7 @@ if(is_admin()){
 		'function'		=> 'list',
 		'list_table'	=> 'WPJAM_Role',
 		'capability'	=> 'edit_roles',
-		'map_meta_cap'	=> ['WPJAM_Role', 'capability_callback']
+		'map_meta_cap'	=> ['WPJAM_Role', 'map_meta_cap']
 	]);
 
 	wpjam_add_admin_load([

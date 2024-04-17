@@ -2,9 +2,9 @@
 Contributors: denishua
 Donate link: https://wpjam.com/
 Tags: WPJAM, Memcached, 性能优化
-Requires at least: 6.2
+Requires at least: 6.3
 Requires PHP: 7.4
-Tested up to: 6.4
+Tested up to: 6.5
 Stable tag: trunk
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
@@ -51,7 +51,7 @@ WPJAM Basic 主要功能，就是去掉 WordPress 当中一些不常用的功能
 
 == Changelog ==
 
-= 6.4.8 =
+= 6.5 =
 * 使用注解的方式实现注册类支持能力
 * List Table 操作 views 自动更新 
 * 复选框字段支持开关模式
@@ -62,8 +62,7 @@ WPJAM Basic 主要功能，就是去掉 WordPress 当中一些不常用的功能
 * 新增 wpjam_db_transaction 函数用于数据库事务
 * 新增 wpjam_call_for_blog 函数用于多站点调用
 * 新增 wpjam_pending_objects 函数
-* 新增 diff_deep 函数
-* 新增 filter_null 和 filter_blank 函数
+* 新增 wpjam_diff 函数
 * WPJAM_Option_items 支持 items_field
 * WPJAM_Register 的 get 方法新增第二个参数 $by
 * list_table 增加 sticky_columns 功能
@@ -98,8 +97,6 @@ WPJAM Basic 主要功能，就是去掉 WordPress 当中一些不常用的功能
 * 新增函数 wpjam_value_callback，支持实例化的 value_callback 函数
 * 新增函数 base64_urldecode / base64_urlencode，实现 URL 安全的 Base64 编码和解码
 * 新增函数 wpjam_generate_jwt / wpjam_verify_jwt， 实现 JWT 生成和验证
-* 新增函数 wpjam_get_admin_prefix / wpjam_admin_url 使用不同后台的处理
-* 新增 Class WPJAM_Singleton 用于所有单例 class 的父级
 * WPJAM_Field 增加 before / after 属性，统一使用 button_field 作为各种按钮的自定义文本
 * WPJAM_Register 增加 admin_load config
 * WPJAM_Model 支持 meta_input 方法
@@ -111,7 +108,6 @@ WPJAM Basic 主要功能，就是去掉 WordPress 当中一些不常用的功能
 * 新增函数 wpjam_try / wpjam_call 处理异常
 * 新增函数 wpjam_register_config / wpjam_get_config 用于生成和获取全局配置接口
 * 新增函数 wpjam_register_meta_option / wpjam_get_meta_options，用于注册和获取 meta option。
-* 新增函数 wpjam_preprocess_args 用于预处理参数，支持 init / hooks 处理
 * 新增函数 wpjam_add_screen_item 支持添加一个项目到某个界面选项
 * 新增函数 get_screen_option 用于获取界面选项
 * 新增函数 wpjam_add_option_section 向已有的设置页面添加标签页
@@ -207,7 +203,7 @@ WPJAM Basic 主要功能，就是去掉 WordPress 当中一些不常用的功能
 * 新增函数 wpjam_compare，用于两个数据比较
 * 新增函数 wpjam_unserialize，用于反序列化失败之后修复数据，再次反序列化
 * 新增函数 wpjam_is_external_url，用于判断外部链接和图片
-* 新增函数 wpjam_register_capability
+* 新增函数 wpjam_map_meta_cap，用于将新增的权限映射到元权限
 * 新增函数 wpjam_get_ajax_data_attr
 * 新增和优化 Gravatar 加速和 Google 字体加速服务
 * 新增 field 支持 minlength / maxlength 服务端验证
@@ -241,8 +237,7 @@ WPJAM Basic 主要功能，就是去掉 WordPress 当中一些不常用的功能
 * WPJAM_Field 支持 required 后端判断
 * 解决文章时间戳相同引起的排序问题
 * 新增函数 wpjam_validate_field_value
-* 新增函数 array_first
-* 新增函数 array_except
+* 新增函数 wpjam_except
 * 新增函数 wpjam_get_taxonomy_query_key 
 * 新增函数 wpjam_get_post_id_field 
 * 新增函数 wpjam_get_term_id_field
@@ -339,7 +334,6 @@ WPJAM Basic 主要功能，就是去掉 WordPress 当中一些不常用的功能
 * 新增移除后台界面右上角的选项
 * 新增移除后台界面右上角的帮助
 * 增强附件名新增时间戳功能
-* 新增 str_replace_deep 函数
 * 将文章页代码独立成独立扩展
 * 「百度站长」扩展支持不加载推送 JS
 * 「Rewrite」扩展支持查看所有规则

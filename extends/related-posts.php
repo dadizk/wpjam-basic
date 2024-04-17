@@ -139,21 +139,18 @@ class WPJAM_Related_Posts extends WPJAM_Option_Model{
 	}
 
 	public static function shortcode($atts, $content=''){
-		$atts	= shortcode_atts(['tag'=>''], $atts);
-		$tags	= $atts['tag'] ? explode(",", $atts['tag']) : '';
-
-		return $tags ? wpjam_render_query(wpjam_query([
+		return !empty($atts['tag']) ? wpjam_render_query([
 			'post_type'		=> 'any',
 			'no_found_rows'	=> true,
 			'post_status'	=> 'publish',
 			'post__not_in'	=> [get_the_ID()],
 			'tax_query'		=> [[
 				'taxonomy'	=> 'post_tag',
-				'terms'		=> $tags,
+				'terms'		=> explode(",", $atts['tag']),
 				'operator'	=> 'AND',
 				'field'		=> 'name'
 			]]
-		]), ['thumb'=>false, 'class'=>'related-posts']) : '';
+		], ['thumb'=>false, 'class'=>'related-posts']) : '';
 	}
 
 	public static function add_hooks(){

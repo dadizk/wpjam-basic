@@ -32,7 +32,8 @@ trait WPJAM_Instance_Trait{
 	}
 
 	public static function instance(...$args){
-		$name	= $args ? implode(':', filter_null($args)) : 'singleton';
+		$args	= wpjam_filter($args, 'isset');
+		$name	= $args ? implode(':', $args) : 'singleton';
 
 		return self::instance_exists($name) ?: self::add_instance($name, static::create_instance(...$args));
 	}
@@ -151,7 +152,7 @@ abstract class WPJAM_Model implements ArrayAccess, IteratorAggregate{
 
 	public function save($data=[]){
 		$meta_type	= self::get_meta_type();
-		$meta_input	= $meta_type ? array_pull($data, 'meta_input') : null;
+		$meta_input	= $meta_type ? wpjam_pull($data, 'meta_input') : null;
 
 		$data	= array_merge($this->_data, $data);
 
@@ -361,8 +362,7 @@ class WPJAM_Handler{
 	public static function get($name, $args=null){
 		if($name){
 			if(is_array($name)){
-				$args	= $name;
-				$name	= md5(maybe_serialize($args));
+				[$args, $name]	= [$name, md5(serialize($name))];
 			}
 
 			return wpjam_get_item('handler', $name) ?: ($args ? self::create($name, $args) : null);
@@ -387,17 +387,17 @@ class WPJAM_Handler{
 		}
 
 		$names	= ['option_items'=>'option_name', 'db'=>'table_name', 'cache_items'=>'cache_key', 'transient_items'=>'transient_key'];
-		$type	= array_pull($args, 'type');
+		$type	= wpjam_pull($args, 'type');
 		$key	= $type ? array_get($names, $type) : null;
 
 		if($key){
-			$type_name	= array_pull($args, $key) ?: $name;
+			$type_name	= wpjam_pull($args, $key) ?: $name;
 
 			return self::add($name, $args, $type_name, 'WPJAM_'.$type);
 		}
 
 		foreach($names as $type => $key){
-			$type_name	= array_pull($args, $key);
+			$type_name	= wpjam_pull($args, $key);
 
 			if($type_name){
 				$name	= $name ?: $type_name;
@@ -473,25 +473,19 @@ class WPJAM_DB extends WPJAM_Args{
 			$type	= wpjam_remove_prefix($method, 'where_');
 
 			if(in_array($type, ['any', 'all'])){
-				$data		= $args[0];
-				$output		= $args[1] ?? 'object';
-				$fragment	= '';
+				$data	= $args[0];
+				$output	= $args[1] ?? 'object';
 
 				if($data && is_array($data)){
-					$where		= array_map(fn($k, $v) => $this->where($k, $v, 'value'), array_keys($data), $data);
-					$type		= $type == 'any' ? 'OR' : 'AND';
-					$fragment	= $this->parse_where($where, $type);
+					$where	= wpjam_map($data, fn($v, $k) => $this->where($k, $v, 'value'));
+					$type	= $type == 'any' ? 'OR' : 'AND';
+					$value	= $this->parse_where($where, $type);
+				}else{
+					$value	= '';
 				}
 
-				if($output != 'object'){
-					return $fragment ?: '';
-				}
-
-				$type		= 'fragment';
-				$args[0]	= $fragment;
-			}
-
-			if($type == 'fragment'){
+				return $output == 'object' ? $this->where_fragment($value) : $value;
+			}elseif($type == 'fragment'){
 				if($args[0]){
 					$this->where[] = ['compare'=>'fragment', 'fragment'=>' ( '.$args[0].' ) '];
 				}
@@ -510,13 +504,11 @@ class WPJAM_DB extends WPJAM_Args{
 
 			if(!is_null($value)){
 				if($key == 'order'){
-					$value	= (strtoupper($value) == 'ASC') ? 'ASC' : 'DESC';
+					$value	= strcasecmp($value, 'ASC') ? 'DESC' : 'ASC';
 				}elseif(in_array($key, ['limit', 'offset'])){
 					$value	= (int)$value;
-				}elseif($key == 'search'){
-					$key	= 'search_term';
 				}else{
-					$key	= str_replace('_by', 'by', $key);
+					$key	= ['search'=>'search_term', 'order_by'=>'orderby', 'group_by'=>'groupby'][$key] ?? $key;
 				}
 
 				$this->query_vars[$key]	= $value;
@@ -556,15 +548,15 @@ class WPJAM_DB extends WPJAM_Args{
 			}
 
 			if(!$this->cache_object){
-				$group	= $this->cache_group;
 				$global	= false;
+				$group	= $this->cache_group;
 
 				if(is_array($group)){
-					$global	= $group[1] ?? false;
-					$group	= $group[0];
+					[$group, $global]	= [$group[0], ($group[1] ?? false)];
 				}
 
-				$this->cache_object	= wpjam_cache($group, [
+				$this->cache_object	= WPJAM_Cache::create([
+					'group'		=> $group,
 					'global'	=> $global,
 					'prefix'	=> $this->cache_prefix,
 					'time'		=> $this->cache_time
@@ -653,7 +645,7 @@ class WPJAM_DB extends WPJAM_Args{
 
 		if($result === false){
 			$result	= $this->find_one($id);
-			$time	= $result ? $this->cache_time : 5;
+			$time	= $result ? $this->cache_time : 60;
 
 			$this->cache_set($id, $result, $time);
 		}
@@ -692,46 +684,52 @@ class WPJAM_DB extends WPJAM_Args{
 			return $this->get_by_ids($values);
 		}
 
-		if($this->group_cache_key && in_array($field, $this->group_cache_key)){
-			$ids	= [];
-			$data	= $uncache = [];
-
-			foreach($values as $v){
-				$result	= $this->query([$field=>$v, 'order'=>$order], 'cache');
-
-				if($result[0] === false || !isset($result[0]['items'])){
-					$uncache[$result[1]]	= $v;
-				}else{
-					$data[$v]	= $result[0]['items'];
-					$ids		= array_merge($ids, $data[$v]);
-				}
-			}
-
-			if($uncache){
-				$result	= $this->query([$field.'__in'=>array_values($uncache), 'order'=>$order, 'cache_results'=>false], 'ids');
-				$ids	= array_merge($ids, $result);
-			}
-
-			$results	= array_values($this->get_by_ids($ids));
-			$cache		= [];
-
-			foreach($data as $v => $_ids){
-				$data[$v]	= $_ids ? array_values($this->get_by_ids($_ids)) : [];
-			}
-
-			foreach($uncache as $k => $v){
-				$data[$v]	= wp_list_filter($results, [$field => $v]) ?: [];
-				$cache[$k]	= ['items'=>array_column($data[$v], $this->primary_key)];
-			}
-
-			if($cache){
-				$this->cache_set_multiple($cache);
-			}
-
-			return $data;
+		if(!$this->group_cache_key || !in_array($field, $this->group_cache_key)){
+			return $this->find_by($field, $values, $order);
 		}
 
-		return $this->find_by($field, $values, $order);
+		$data	= $ids = $uncache = [];
+
+		foreach($values as $v){
+			$result	= $this->query([$field=>$v, 'order'=>$order], 'cache');
+
+			if($result[0] === false || !isset($result[0]['items'])){
+				$uncache[$v]	= $result;
+			}else{
+				$data[$v]	= $result[0]['items'];
+				$ids		= array_merge($ids, $data[$v]);
+			}
+		}
+
+		if($uncache){
+			$ids	= array_merge($ids, $this->query([
+				$field.'__in'	=> array_keys($uncache),
+				'order'			=> $order,
+				'cache_results'	=> false
+			], 'ids'));
+		}
+
+		$results	= array_values($this->get_by_ids($ids));
+		$cache		= [];
+
+		foreach($data as $v => $_ids){
+			$data[$v]	= $_ids ? array_values($this->get_by_ids($_ids)) : [];
+		}
+
+		foreach($uncache as $v => $result){
+			$data[$v]	= wp_list_filter($results, [$field => $v]) ?: [];
+
+			$cache[$result[1]]	= [
+				'data'			=>['items'=>array_column($data[$v], $this->primary_key)], 
+				'last_changed'	=>$result[2]
+			];
+		}
+
+		if($cache){
+			$this->cache_set_multiple($cache);
+		}
+
+		return $data;
 	}
 
 	public function cache_delete_by($field, $value, $order='ASC'){
@@ -785,21 +783,24 @@ class WPJAM_DB extends WPJAM_Args{
 		}
 
 		$data	= $this->cache_get_multiple($ids) ?: [];
-		$data	= array_filter($data, fn($item) => is_array($item));
+		$data	= array_filter($data, 'is_array');
 		$ids	= array_diff($ids, array_keys($data));
 
-		$results	= $ids ? $this->find_by($this->primary_key, $ids) : [];
-		$results	= array_combine(array_column($results, $this->primary_key), $results);
+		if($ids){
+			$results	= $this->find_by($this->primary_key, $ids);
 
-		if($results){
-			$this->cache_set_multiple($results);
-		}
+			if($results){
+				$results	= wpjam_array($results, fn($k, $v) => $v[$this->primary_key]);
 
-		foreach($ids as $id){
-			if(isset($results[$id])){
-				$data[$id]	= $results[$id];
-			}else{
-				$this->cache_set($id, [], 5);
+				$this->cache_set_multiple($results);
+			}
+
+			foreach($ids as $id){
+				if(isset($results[$id])){
+					$data[$id]	= $results[$id];
+				}else{
+					$this->cache_set($id, [], 5);
+				}
 			}
 		}
 
@@ -853,7 +854,7 @@ class WPJAM_DB extends WPJAM_Args{
 
 		if($orderby){
 			if(is_array($orderby)){
-				$parsed		= array_map([$this, 'parse_orderby'], array_keys($orderby), $orderby);
+				$parsed		= wpjam_map($orderby, fn($v, $k) => $this->parse_orderby($k, $v));
 				$parsed		= array_filter($parsed);
 				$orderby	= $parsed ? implode(', ', $parsed) : '';
 			}elseif(str_contains($orderby, ',') || (str_contains($orderby, '(') && str_contains($orderby, ')'))){
@@ -893,16 +894,25 @@ class WPJAM_DB extends WPJAM_Args{
 		return $this->get_request($this->get_clauses($fields));
 	}
 
-	public function get_results($fields=[]){
+	public function get_results($fields=[], $found_rows=null){
 		$clauses	= $this->get_clauses($fields);
+		$query_ids	= in_array($clauses['fields'], ['*', $this->table.'.*']);
 
-		if(in_array($clauses['fields'], ['*', $this->table.'.*'])){
+		if($query_ids){
 			$ids	= $this->query_ids($clauses);
-
-			return array_values($this->get_by_ids($ids));
+		}else{
+			$items	= $this->get_results_by_db($this->get_request($clauses), ARRAY_A);
 		}
 
-		return $this->get_results_by_db($this->get_request($clauses), ARRAY_A);
+		if($found_rows){
+			$total	= $this->find_total();
+		}
+
+		if($query_ids){
+			$items	= array_values($this->get_by_ids($ids));
+		}
+
+		return $found_rows ? compact('items', 'total') : $items;
 	}
 
 	public function find($fields=[]){
@@ -967,18 +977,12 @@ class WPJAM_DB extends WPJAM_Args{
 
 		$this->cache_delete_by_conditions([], $datas);
 
-		$data		= current($datas);
-		$values		= [];
+		$data		= reset($datas);
 		$fields		= '`'.implode('`, `', array_keys($data)).'`';
-		$updates	= implode(', ', array_map(fn($field) => "`$field` = VALUES(`$field`)", array_keys($data)));
-
-		foreach($datas as $data){
-			$values[]	= $this->format($data);
-		}
-
-		$values	= implode(',', $values);
-		$sql	= "INSERT INTO `$this->table` ({$fields}) VALUES {$values} ON DUPLICATE KEY UPDATE {$updates}";
-		$result	= $this->query_by_db($sql);
+		$updates	= implode(', ', array_map(fn($k) => "`$k` = VALUES(`$k`)", array_keys($data)));
+		$values		= implode(', ', array_map([$this, 'format'], $datas));
+		$sql		= "INSERT INTO `$this->table` ({$fields}) VALUES {$values} ON DUPLICATE KEY UPDATE {$updates}";
+		$result		= $this->query_by_db($sql);
 
 		return (false === $result) ? new WP_Error('insert_error', $this->last_error) : $result;
 	}
@@ -991,9 +995,9 @@ class WPJAM_DB extends WPJAM_Args{
 		if($id){
 			$GLOBALS['wpdb']->check_current_query = false;
 
-			$data		= filter_null($data);
+			$data		= wpjam_filter($data, 'isset', false);
 			$fields		= implode(', ', array_keys($data));
-			$updates	= implode(', ', array_map(fn($field) => "`$field` = VALUES(`$field`)", array_keys($data)));
+			$updates	= implode(', ', array_map(fn($k) => "`$k` = VALUES(`$k`)", array_keys($data)));
 			$values		= $this->format($data);
 			$sql		= "INSERT INTO `$this->table` ({$fields}) VALUES {$values} ON DUPLICATE KEY UPDATE {$updates}";
 			$result		= $this->query_by_db($sql);
@@ -1013,7 +1017,6 @@ class WPJAM_DB extends WPJAM_Args{
 	}
 
 	/*
-	用法：
 	update($id, $data);
 	update($data, $where);
 	update($data); // $where各种 参数通过 where() 方法事先传递
@@ -1045,7 +1048,7 @@ class WPJAM_DB extends WPJAM_Args{
 			if($data && $where){
 				$this->cache_delete_by_conditions($where, $data);
 
-				$fields	= implode(', ', array_map(fn($field, $value) => "`$field` = ".(is_null($value) ? 'NULL' : $this->format($value, $field)), array_keys($data), $data));
+				$fields	= implode(', ', wpjam_map($data, fn($v, $k) => "`$k` = ".(is_null($v) ? 'NULL' : $this->format($v, $k))));
 
 				return $this->query_by_db("UPDATE `{$this->table}` SET {$fields} WHERE {$where}");
 			}
@@ -1055,7 +1058,6 @@ class WPJAM_DB extends WPJAM_Args{
 	}
 
 	/*
-	用法：
 	delete($where);
 	delete($id);
 	delete(); // $where 参数通过各种 where() 方法事先传递
@@ -1184,7 +1186,7 @@ class WPJAM_DB extends WPJAM_Args{
 		$fields	= $this->searchable_fields;
 
 		if($fields && $this->search_term){
-			$search	= array_map(fn($field) => "`{$field}` LIKE '%".$this->esc_like_by_db($this->search_term)."%'", $fields);
+			$search	= array_map(fn($k) => "`{$k}` LIKE '%".$this->esc_like_by_db($this->search_term)."%'", $fields);
 			$where	.= ($where ? ' AND ' : '').'('.implode(' OR ', $search).')';
 		}
 
@@ -1326,7 +1328,7 @@ class WPJAM_DB extends WPJAM_Args{
 			$this->where($key, wpjam_get_data_parameter($key));
 		}
 
-		return ['items'=>$this->get_results(), 'total'=>$this->find_total()];
+		return $this->get_results([], true);
 	}
 
 	public function query($query_vars, $output='object'){
@@ -1351,12 +1353,12 @@ class WPJAM_DB extends WPJAM_Args{
 
 		$qv				= $query_vars;
 		$orderby		= $qv['orderby'] ?? $this->primary_key;
-		$found_rows		= !array_pull($qv, 'no_found_rows');
-		$cache_results	= array_pull($qv, 'cache_results', true);
-		$fields			= array_pull($qv, 'fields');
+		$found_rows		= !wpjam_pull($qv, 'no_found_rows');
+		$cache_results	= wpjam_pull($qv, 'cache_results', true);
+		$fields			= wpjam_pull($qv, 'fields');
 
 		if($this->meta_type){
-			$meta_query	= array_pulls($qv, [
+			$meta_query	= wpjam_pull($qv, [
 				'meta_key',
 				'meta_value',
 				'meta_compare',
@@ -1386,12 +1388,7 @@ class WPJAM_DB extends WPJAM_Args{
 			}elseif($key == 'offset'){
 				$this->offset($value);
 			}elseif($key == 'orderby'){
-				if(is_array($value)){
-					$keys	= array_map('esc_sql', array_keys($value));
-					$value	= array_combine($keys, array_values($value));
-				}else{
-					$value	= esc_sql($value);
-				}
+				$value	= is_array($value) ? wpjam_array($value, 'esc_sql') : esc_sql($value);
 
 				$this->orderby($value);
 			}elseif($key == 'order'){
@@ -1445,12 +1442,19 @@ class WPJAM_DB extends WPJAM_Args{
 		$result	= $cache_key = false;
 
 		if($cache_results){
-			$cache_key	= md5(maybe_serialize($query_vars).$request).':'.$this->get_last_changed($query_vars);
-			$result		= $this->cache_get_force($cache_key);
+			$last_changed	= $this->get_last_changed($query_vars);
+			$cache_key		= md5(serialize($query_vars).$request);
+			$result			= $this->cache_get_force($cache_key);
+
+			if($result && is_array($result) && isset($result['last_changed']) && $result['last_changed'] == $last_changed){
+				$result	= $result['data'];
+			}else{
+				$result	= false;
+			}
 		}
 
 		if($output == 'cache'){
-			return [$result, $cache_key];
+			return [$result, $cache_key, $last_changed];
 		}
 
 		if($result === false || !isset($result['items'])){
@@ -1465,7 +1469,7 @@ class WPJAM_DB extends WPJAM_Args{
 			}
 
 			if($cache_results){
-				$this->cache_set_force($cache_key, $result, DAY_IN_SECONDS);
+				$this->cache_set_force($cache_key, ['data'=>$result, 'last_changed'=>$last_changed], DAY_IN_SECONDS);
 			}
 		}
 
@@ -1663,7 +1667,7 @@ class WPJAM_Items extends WPJAM_Args{
 				}
 			}
 
-			$item	= filter_null($item, true);
+			$item	= wpjam_filter($item, 'isset');
 		}
 
 		if($method == 'insert'){
@@ -1876,10 +1880,10 @@ class WPJAM_Content_Items extends WPJAM_Items{
 			$post	= get_post($this->post_id);
 			$items	= $post ? $post->post_content : '';
 
-			return $items ? maybe_unserialize($items) : [];
+			return $items ? unserialize($items) : [];
 		}elseif($method == 'update_items'){
 			$items	= array_shift($args);
-			$items	= $items ? maybe_serialize($items) : '';
+			$items	= $items ? serialize($items) : '';
 		
 			return WPJAM_Post::update($this->post_id, ['post_content'=>$items]);
 		}
@@ -1900,16 +1904,16 @@ class WPJAM_Cache_Items extends WPJAM_Items{
 
 	public function __call($method, $args){
 		if(in_array($method, ['get_items', 'update_items'])){
-			$cache	= is_object($this->group) ? $this->group : wpjam_cache($this->group, $this->get_args());
-			$items	= $cache->get_with_cas($this->key, $token);
+			$this->cache	??= WPJAM_Cache::create($this->get_args());
+			$items			= $this->cache->get_with_cas($this->key, $token);
 
 			if(!is_array($items)){
-				$cache->set($this->key, []);
+				$this->cache->set($this->key, []);
 
-				$items	= $cache->get_with_cas($this->key, $token);
+				$items	= $this->cache->get_with_cas($this->key, $token);
 			}
 
-			return $method == 'get_items' ? $items : $cache->cas($token, $this->key, array_shift($args));
+			return $method == 'get_items' ? $items : $this->cache->cas($token, $this->key, array_shift($args));
 		}
 
 		return parent::__call($method, $args);

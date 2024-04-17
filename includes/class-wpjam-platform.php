@@ -20,26 +20,30 @@ class WPJAM_Platform extends WPJAM_Register{
 		return call_user_func($this->verify);
 	}
 
-	public function get_item($page_key, $field=null){
-		return is_array($page_key) ? $page_key : parent::get_item($page_key, $field);
+	public function get_item($page_key, $field=null){	// delete 2024-06-01
+		if(is_array($page_key)){
+			trigger_error('page_key is array');
+
+			return $page_key;
+		}
+
+		return parent::get_item($page_key, $field);
 	}
 
 	public function get_tabbar($page_key){
-		$tabbar	= $this->get_item_arg($page_key, 'tabbar');
+		$item	= $this->get_item($page_key);
 
-		if($tabbar){
-			$title	= $this->get_item_arg($page_key, 'title');
-			$tabbar	= $tabbar === true ? [] : $tabbar;
-			$tabbar	= is_array($tabbar) ? wp_parse_args($tabbar, ['text'=>$title]) : ['text'=>$tabbar];
+		if($item && !empty($item['tabbar'])){
+			$tabbar	= $item['tabbar'] === true ? [] : $item['tabbar'];
+
+			return $tabbar+['text'=>$item['title'] ?? ''];
 		}
-
-		return $tabbar;
 	}
 
 	public function get_page($page_key){
 		$path	= $this->get_item_arg($page_key, 'path');
 
-		return $path ? current(explode('?', $path)) : null;
+		return $path ? explode('?', $path)[0] : '';
 	}
 
 	protected function get_data_type($page_key){
@@ -72,18 +76,10 @@ class WPJAM_Platform extends WPJAM_Register{
 		return isset($item['path']) || isset($item['callback']);
 	}
 
-	public function get_path($page_key, $args=[], $title=''){
-		$item	= $this->get_item($page_key);
-
-		if(!$item){
-			return new WP_Error('invalid_page_key', [$title]);
-		}
-
-		if(is_array($args)){
-			$args	= wp_parse_args(filter_null($args), $item);
-		}
-
-		$callback	= array_pull($item, 'callback');
+	public function get_path($page_key, $args=[]){
+		$item		= $this->get_item($page_key);
+		$callback	= wpjam_pull($item, 'callback');
+		$args		= is_array($args) ? wp_parse_args(wpjam_filter($args, 'isset', false), $item) : $args;
 
 		if($callback){
 			if(is_callable($callback) && is_array($args)){
@@ -115,17 +111,44 @@ class WPJAM_Platform extends WPJAM_Register{
 			}
 
 			$items	= $object->query_items($query_args, false) ?: [];
-
-			foreach($items as $item){
-				$path	= $this->get_path($page_key, $item['value']);
-
-				if($path && !is_wp_error($path)){
-					$paths[]	= $path;
-				}
-			}
+			$paths	= array_map(fn($item) => $this->get_path($page_key, $item['value']), $items);
+			$paths	= array_filter($paths, fn($path) => $path && !is_wp_error($path));
 		}
 
 		return $paths;
+	}
+
+	public function parse_path($args, $postfix=''){
+		$page_key	= wpjam_pull($args, 'page_key'.$postfix);
+
+		if($page_key == 'none'){
+			if(!empty($args['video'])){
+				return [
+					'type'	=> 'video',
+					'video'	=> $args['video'],
+					'vide'	=> wpjam_get_qqv_id($args['video'])
+				];
+			}
+
+			return ['type'=>'none'];
+		}elseif($page_key){
+			if(!$this->get_item($page_key)){
+				return [];
+			}
+
+			$args	= $postfix ? wpjam_map($this->get_fields($page_key), fn($v, $k) => $args[$k.$postfix] ?? null) : $args;
+			$path	= $this->get_path($page_key, $args);
+
+			if(is_wp_error($path)){
+				return $path;
+			}elseif(is_array($path)){
+				return $path;
+			}elseif(isset($path)){
+				return ['type'=>'', 'page_key'=>$page_key, 'path'=>$path];
+			}
+		}
+
+		return [];
 	}
 
 	public function registered(){
@@ -135,37 +158,30 @@ class WPJAM_Platform extends WPJAM_Register{
 			wpjam_register_path('post_tag',	'template',	['title'=>'标签页',		'path'=>'',	'page_type'=>'taxonomy']);
 			wpjam_register_path('author',	'template',	['title'=>'作者页',		'path'=>'',	'page_type'=>'author']);
 			wpjam_register_path('post',		'template',	['title'=>'文章详情页',	'path'=>'',	'page_type'=>'post_type']);
-			wpjam_register_path('external', 'template',	['title'=>'外部链接',		'path'=>'',	'fields'=>[
-				'url'	=> ['title'=>'',	'type'=>'url',	'required'=>true,	'placeholder'=>'请输入外部链接地址，仅适用网页版。']
-			]]);
+			wpjam_register_path('external', 'template',	['title'=>'外部链接',		'path'=>'',	'fields'=>['url'=>['type'=>'url', 'required'=>true, 'placeholder'=>'请输入链接地址。']],	'callback'=>fn($args) => ['type'=>'external', 'url'=>$args['url']]]);
 		}
 	}
 
 	public static function get_options($output=''){
-		$objects	= self::get_registereds();
-		$objects	= array_except($objects, 'web');
-
-		return wp_list_pluck($objects, 'title', $output);
+		return wp_list_pluck(self::get_registereds(), 'title', $output);
 	}
 
 	public static function get_current($args=[], $output='object'){
 		if($output == 'bit' && wp_is_numeric_array($args)){
-			$objects	= self::get_by(['path'=>true]);
-			$bits		= wp_list_pluck($objects, 'bit');
-			$args		= array_values(wp_array_slice_assoc(array_flip($bits), $args));
+			$bits	= wp_list_pluck(self::get_by(['path'=>true]), 'bit');
+			$args	= array_values(wp_array_slice_assoc(array_flip($bits), $args));
 		}
 
 		$args	= $args ?: ['path'=>true];
+		$object	= wpjam_find(self::get_by($args), fn($object) => $object && $object->verify());
 
-		foreach(self::get_by($args) as $object){
-			if($object && $object->verify()){
-				if($output == 'bit'){
-					return $object->bit;
-				}elseif($output == 'object'){
-					return $object;
-				}else{
-					return $object->name;
-				}
+		if($object){
+			if($output == 'bit'){
+				return $object->bit;
+			}elseif($output == 'object'){
+				return $object;
+			}else{
+				return $object->name;
 			}
 		}
 	}
@@ -175,7 +191,6 @@ class WPJAM_Platform extends WPJAM_Register{
 			'weapp'		=> ['bit'=>1,	'order'=>4,		'title'=>'小程序',	'verify'=>'is_weapp'],
 			'weixin'	=> ['bit'=>2,	'order'=>4,		'title'=>'微信网页',	'verify'=>'is_weixin'],
 			'mobile'	=> ['bit'=>4,	'order'=>8,		'title'=>'移动网页',	'verify'=>'wp_is_mobile'],
-			'web'		=> ['bit'=>8,	'order'=>10,	'title'=>'网页',		'verify'=>'__return_true'],
 			'template'	=> ['bit'=>8,	'order'=>10,	'title'=>'网页',		'verify'=>'__return_true']
 		];
 	}
@@ -189,265 +204,124 @@ class WPJAM_Platforms{
 	}
 
 	private $platforms	= [];
-
-	private $fields	= [];
-	private $groups	= [];
-
-	private $backup_fields	= [];
-	private $backup_groups	= [];
-	private $backup_show_if	= [];
+	private $cache		= [];
 
 	protected function __construct($platforms){
 		$this->platforms	= $platforms;
 	}
 
-	protected function has_path($path, $operator='AND', $strict=false){
-		$platforms	= $this->platforms;
-
-		if($path->name == 'web_view' && $operator == 'AND'){
-			$platforms	= array_except($platforms, ['web','template']);
-		}
-
-		foreach($platforms as $platform){
-			$has	= $platform->has_path($path->name, $strict);
-
-			if($operator == 'AND'){
-				if(!$has){
-					return false;
-				}
-			}elseif($operator == 'OR'){
-				if($has){
-					return true;
-				}
-			}
-		}
+	protected function has_path($page_key, $operator='AND', $strict=false){
+		$fn	= fn($pf) => $pf->has_path($page_key, $strict);
 
 		if($operator == 'AND'){
-			return true;
+			return wpjam_every($this->platforms, $fn);
 		}elseif($operator == 'OR'){
-			return false;
+			return wpjam_some($this->platforms, $fn);
 		}
 	}
 
-	protected function parse_path($platform, $item, $postfix='', $title='', $backup=false, $wp_error=false){
-		if($backup){
-			$postfix	.= '_backup';
-			$title		= '备用'.$title;
+	protected function add_fields(&$fields, $path, $postfix){
+		$group		= $path->group ?: ($path->tabbar ? 'tabbar' : 'others');
+		$options	= &$fields['page_key'.$postfix]['options'][$group]['options'];
+
+		$options[$path->name]	= $path->title;
+
+		if($group == 'tabbar' && isset($options['none'])){
+			$options['none']	= wpjam_pull($options, 'none');
 		}
 
-		$page_key	= array_pull($item, 'page_key'.$postfix);
+		foreach($path->get_fields($this->platforms) as $key => $field){
+			$key	= $key.$postfix;
 
-		if($page_key == 'none'){
-			if(!empty($item['video'])){
-				return [
-					'type'	=> 'video',
-					'video'	=> $item['video'],
-					'vide'	=> wpjam_get_qqv_id($item['video'])
-				];
+			if(isset($field['show_if'])){
+				$fields[$key]	= $field;
 			}else{
-				return ['type'=>'none'];
-			}
-		}elseif($page_key == 'external'){
-			if(in_array($platform->name, ['web', 'template'])){
-				return [
-					'type'	=> 'external',
-					'url'	=> $item['url']
-				];
-			}
-		}elseif($page_key == 'web_view'){
-			if(in_array($platform->name, ['web', 'template'])){
-				return [
-					'type'	=> 'external',
-					'url'	=> $item['src']
-				];
-			}else{
-				return [
-					'type'	=> 'web_view',
-					'src'	=> $item['src']
-				];
-			}
-		}elseif($page_key){
-			if($postfix){
-				foreach($platform->get_fields($page_key) as $key => $field){
-					$item[$key]	= array_pull($item, $key.$postfix, '');
-				}
-
-				$item	= filter_null($item);
-			}
-
-			$path	= $platform->get_path($page_key, $item, $title);
-
-			if(is_wp_error($path)){
-				return $wp_error ? $path : [];
-			}elseif(is_array($path)){
-				return $path;
-			}elseif(isset($path)){
-				return [
-					'type'		=> '',
-					'page_key'	=> $page_key,
-					'path'		=> $path
-				];
-			}
-		}
-
-		return [];
-	}
-
-	protected function add_group($path, $backup=false){
-		if($backup === 'both'){
-			$this->add_group($path);
-			$this->add_group($path, true);
-		}else{
-			$prop	= $backup ? 'backup_groups' : 'groups';
-			$groups	= &$this->$prop;
-
-			if(is_object($path)){
-				$group	= $path->group ?: ($path->tabbar ? 'tabbar' : 'others');
-				$name	= $path->name;
-				$title	= $path->title;
-			}else{
-				$group	= array_shift($path);
-				$name	= array_shift($path);
-				$title	= array_shift($path);
-			}
-
-			$groups[$group]['options'][$name]	= $title;
-		}
-	}
-
-	protected function add_fields($path, $postfix='', $prepend='', $backup=false){
-		$this->add_group($path);
-
-		$props	= ['fields'];
-
-		if($backup){
-			if($this->has_path($path, 'AND')){
-				$props[]	= 'backup_fields';
-
-				$this->add_group($path, $backup);
-			}else{
-				$this->backup_show_if['value'][]	= $path->name;
-			}
-		}
-
-		$path_fields	= [];
-
-		foreach($this->platforms as $platform){
-			$path_fields	= array_merge($path_fields, $platform->get_fields($path->name));
-		}
-
-		foreach($props as $prop){
-			$fields		= &$this->$prop;
-			$postfix	.= $prop == 'backup_fields' ? '_backup' : '';
-
-			foreach($path_fields as $key => $field){
-				$key	.= $postfix;
-
-				if($prepend){
-					$field['prepend_name']	= $prepend;
-				}
-
-				if(isset($field['show_if'])){
-					$fields[$key]	= $field;
+				if(isset($fields[$key])){
+					$fields[$key]['show_if']['value'][]	= $path->name;
 				}else{
-					if(isset($fields[$key])){
-						$fields[$key]['show_if']['value'][]	= $path->name;
-					}else{
-						$fields[$key]	= array_merge($field, [
-							'title'		=> '',
-							'show_if'	=> ['key'=>'page_key'.$postfix, 'compare'=>'IN', 'value'=>[$path->name]]
-						]);
-					}
+					$fields[$key]	= array_merge($field, [
+						'title'		=> '',
+						'show_if'	=> ['key'=>'page_key'.$postfix, 'compare'=>'IN', 'value'=>[$path->name]]
+					]);
 				}
 			}
-		}
-	}
-
-	public function get_current($output='object'){
-		if(count($this->platforms) > 1){
-			$platform	= current($this->platforms);
-
-			return $output == 'object' ? $platform : $platform->name;
-		}else{
-			return WPJAM_Platform::get_current(array_keys($this->platforms), $output);
 		}
 	}
 
 	public function get_fields($args, $strict=false){
-		$prepend	= array_pull($args, 'prepend_name');
-		$postfix	= array_pull($args, 'postfix');
-		$title		= array_pull($args, 'title') ?: '页面';
-		$page_key	= 'page_key'.$postfix;
-		$backup		= count($this->platforms) > 1 && !$strict;
+		$prepend	= wpjam_pull($args, 'prepend_name');
+		$postfix	= wpjam_pull($args, 'postfix');
+		$title		= wpjam_pull($args, 'title') ?: '页面';
+		$backup		= (count($this->platforms) > 1 && !$strict);
+		$key		= 'page_key'.$postfix;
+		$paths		= WPJAM_Path::get_by($args);
+		$cache_key	= md5(serialize(['postfix'=>$postfix, 'strict'=>$strict, 'page_keys'=>array_keys($paths)]));
+		$cache		= $this->cache[$cache_key] ?? null;
 
-		$this->groups	= WPJAM_Path::get_groups();
-		$this->fields	= [$page_key=>['options'=>&$this->groups, 'prepend_name'=>$prepend]];
-
-		if($backup){
-			$backup_title	= '备用'.$title;
-
-			$this->backup_show_if	= ['key'=>$page_key, 'compare'=>'IN', 'value'=>[]];
-			$this->backup_groups	= WPJAM_Path::get_groups();
-			$this->backup_fields	= [$page_key.'_backup'=>[
-				'options'		=> &$this->backup_groups, 
-				'description'	=> $backup_title.'在'.$title.'无效时启用',
-				'prepend_name'	=> $prepend
-			]];
-		}
-
-		foreach(WPJAM_Path::get_by($args) as $path){
-			if($this->has_path($path, 'OR', $strict)){
-				$this->add_fields($path, $postfix, $prepend, $backup);
-			}
-		}
-
-		$fields	= [$page_key.'_set'=>[
-			'title'		=> $title,
-			'type'		=> 'fieldset',
-			'fields'	=> $this->fields
-		]];
-
-		if(!$strict){
-			$this->add_group(['tabbar', 'none', '只展示不跳转'], 'both');
+		if(!$cache){
+			$groups				= WPJAM_Path::get_groups($strict);
+			$cache['fields']	= [$key=>['options'=>$groups]];
 
 			if($backup){
-				$fields[$page_key.'_backup_set']	= [
-					'title'		=> $backup_title,
-					'type'		=> 'fieldset',
-					'fields'	=> $this->backup_fields,
-					'show_if'	=> $this->backup_show_if
-				];
+				$cache['show_if']	= ['key'=>$key, 'compare'=>'IN', 'value'=>[]];
+				$cache['backup']	= [$key.'_backup'=>['options'=>$groups]];
 			}
+
+			foreach($paths as $path){
+				if($this->has_path($path->name, 'OR', $strict)){
+					$this->add_fields($cache['fields'], $path, $postfix);
+
+					if($backup){
+						if($this->has_path($path->name, 'AND')){
+							$this->add_fields($cache['backup'], $path, $postfix.'_backup');
+						}else{
+							$cache['show_if']['value'][]	= $path->name;
+						}
+					}
+				}
+			}
+
+			$this->cache[$cache_key] = $cache;
+		}
+
+		$fields	= [$key.'_set'=>['type'=>'fieldset', 'title'=>$title, 'fields'=>$cache['fields'], 'prepend_name'=>$prepend]];
+
+		if($backup){
+			$fields	+= [$key.'_backup_set'=>['type'=>'fieldset', 'title'=>'备用'.$title, 'fields'=>$cache['backup'], 'prepend_name'=>$prepend, 'show_if'=>$cache['show_if']]];
 		}
 
 		return $fields;
 	}
 
-	public function parse_item($item, $postfix='', $title=''){
-		$parsed		= null;
-		$platform	= $this->get_current();
-
-		if($platform){
-			$parsed	= $this->parse_path($platform, $item, $postfix, $title);
-
-			if(count($this->platforms) > 1 && !$parsed){
-				$parsed	= $this->parse_path($platform, $item, $postfix, $title, true);
-			}
+	public function get_current($output='object'){
+		if(count($this->platforms) == 1){
+			return $output == 'object' ? reset($this->platforms) : reset($this->platforms)->name;
+		}else{
+			return WPJAM_Platform::get_current(array_keys($this->platforms), $output);
 		}
-
-		return $parsed ?: ['type'=>'none'];
 	}
 
-	public function validate_item($item, $postfix='', $title='', $backup=false){
-		foreach($this->platforms as $platform){
-			$result	= $this->parse_path($platform, $item, $postfix, $title, $backup, true);
+	public function parse_item($item, $postfix=''){
+		$platform	= $this->get_current();
+		$parsed		= $platform->parse_path($item, $postfix);
 
-			if(is_wp_error($result)){
-				if(!$backup && count($this->platforms) > 1 && $result->get_error_code() == 'invalid_page_key'){
-					return $this->validate_item($item, $postfix, $title, true);
+		if((!$parsed || is_wp_error($parsed)) && count($this->platforms) > 1){
+			$parsed	= $platform->parse_path($item, $postfix.'_backup');
+		}
+
+		return ($parsed && !is_wp_error($parsed)) ? $parsed : ['type'=>'none'];
+	}
+
+	public function validate_item($item, $postfix='', $title=''){
+		foreach($this->platforms as $platform){
+			$result	= $platform->parse_path($item, $postfix);
+
+			if(is_wp_error($result) || $result){
+				if(!$result && count($this->platforms) > 1 && !str_ends_with($postfix, '_backup')){
+					return $this->validate_item($item, $postfix.'_backup', '备用'.$title);
 				}
 
-				return $result;
+				return $result ?: new WP_Error('invalid_page_key', [$title]);
 			}
 		}
 
@@ -476,32 +350,22 @@ class WPJAM_Path extends WPJAM_Register{
 		return parent::__get($key);
 	}
 
-	protected static function parse_platform(&$args){
-		$platform	= array_pulls($args, ['platform', 'path_type']);
-
-		return $platform ? current($platform) : null;
+	public function get_fields($platforms){
+		return array_reduce($platforms, fn($fields, $pf) => array_merge($fields, $pf->get_fields($this->name)), []);
 	}
 
-	protected static function add_group($args){
-		if(isset($args['group']) && is_array($args['group'])){
-			$group	= array_pull($args, 'group');
-
-			if(isset($group['key'], $group['title'])){
-				wpjam_add_item('path_group', $group['key'], ['title'=>$group['title'], 'options'=>[]]);
-
-				$args['group']	= $group['key'];
-			}
-		}
-
-		return $args;
-	}
-
-	public static function get_groups(){
-		return array_merge(
+	public static function get_groups($strict=false){
+		$groups	= array_merge(
 			['tabbar'=>['title'=>'菜单栏/常用', 'options'=>[]]],
 			wpjam_get_items('path_group'),
 			['others'=>['title'=>'其他页面', 'options'=>[]]]
 		);
+
+		if(!$strict){
+			$groups['tabbar']['options']['none']	= '只展示不跳转';
+		}
+
+		return $groups;
 	}
 
 	public static function create($name, ...$args){
@@ -511,7 +375,10 @@ class WPJAM_Path extends WPJAM_Register{
 		$args	= wp_is_numeric_array($args) ? $args : [$args];
 
 		foreach($args as $_args){
-			foreach((array)self::parse_platform($_args) as $pf){
+			$pfs	= wp_array_slice_assoc($_args, ['platform', 'path_type']);
+			$pfs	= array_merge(...array_map('wpjam_array', array_values($pfs)));
+
+			foreach($pfs as $pf){
 				$platform	= WPJAM_Platform::get($pf);
 
 				if($platform){
@@ -521,7 +388,16 @@ class WPJAM_Path extends WPJAM_Register{
 						$_args[$page_type]	= $name;
 					}
 
-					$_args	= self::add_group($_args);
+					if(isset($_args['group']) && is_array($_args['group'])){
+						$group	= wpjam_pull($_args, 'group');
+
+						if(isset($group['key'], $group['title'])){
+							wpjam_add_item('path_group', $group['key'], ['title'=>$group['title'], 'options'=>[]]);
+
+							$_args['group']	= $group['key'];
+						}
+					}
+
 					$_args	= array_merge($_args, ['platform'=>$pf, 'path_type'=>$pf]);
 
 					$object->update_args($_args, false)->add_item($pf, $_args);
@@ -549,9 +425,7 @@ class WPJAM_Path extends WPJAM_Register{
 		}else{
 			self::unregister($name);
 
-			foreach(WPJAM_Platform::get_registereds() as $platform){
-				$platform->delete_item($name);
-			}
+			array_walk(WPJAM_Platform::get_registereds(), fn($pf) => $pf->delete_item($name));
 		}
 	}
 }
@@ -578,7 +452,7 @@ class WPJAM_Data_Type extends WPJAM_Register{
 				return $this->meta_type;
 			}
 		}elseif($method == 'query_items'){
-			$args[0]	= filter_null($args[0]);
+			$args[0]	= wpjam_filter($args[0], 'isset', false);
 			$wp_error	= $args[1] ?? true;
 		}
 
@@ -606,7 +480,7 @@ class WPJAM_Data_Type extends WPJAM_Register{
 	}
 
 	public static function parse_json_module($args){
-		$data_type	= array_pull($args, 'data_type');
+		$data_type	= wpjam_pull($args, 'data_type');
 		$object		= self::get($data_type);
 
 		if(!$object){
@@ -629,6 +503,22 @@ class WPJAM_Data_Type extends WPJAM_Register{
 			'video'		=> ['model'=>'WPJAM_Video_Data_Type'],
 		];
 	}
+
+	public static function ajax_response($data){
+		$items	= [];
+		$object	= self::get($data['data_type']);
+
+		if($object){
+			$args	= $data['query_args'] ?: [];
+			$items	= $object->query_items($args) ?: [];
+
+			if(is_wp_error($items)){
+				return [['label'=>$items->get_error_message(), 'value'=>$items->get_error_code()]];
+			}
+		}
+
+		return ['items'=>$items];
+	}
 }
 
 class WPJAM_Post_Type_Data_Type{
@@ -645,7 +535,7 @@ class WPJAM_Post_Type_Data_Type{
 			$args['s']	= $args['search'];
 		}
 
-		return get_posts(wp_parse_args($args, [
+		return wpjam_get_posts(wp_parse_args($args, [
 			'posts_per_page'	=> $args['number'] ?? 10,
 			'suppress_filters'	=> false,
 		])) ?: [];
@@ -697,8 +587,8 @@ class WPJAM_Post_Type_Data_Type{
 	}
 
 	public static function get_field($args){
-		$title		= array_pull($args, 'title');
-		$post_type	= array_pull($args, 'post_type');
+		$title		= wpjam_pull($args, 'title');
+		$post_type	= wpjam_pull($args, 'post_type');
 
 		if(is_null($title) && $post_type && is_string($post_type)){
 			$title	= wpjam_get_post_type_setting($post_type, 'title');
@@ -782,7 +672,7 @@ class WPJAM_Taxonomy_Data_Type{
 			return $prev;
 		}elseif(is_numeric($value)){
 			if(get_term($value, $taxonomy)){
-				return (int)$value; 
+				return (int)$value;
 			}
 		}else{
 			$result	= term_exists($value, $taxonomy);
@@ -813,127 +703,74 @@ class WPJAM_Taxonomy_Data_Type{
 	}
 
 	public static function get_field($args){
-		$taxonomy	= $args['taxonomy'] ?? '';
-		$object		= ($taxonomy && is_string($taxonomy)) ? wpjam_get_taxonomy_object($taxonomy) : null;
-		$type		= $args['type'] ?? '';
-		$title		= $args['title'] ?? null;
-		$title		= $args['title'] = (is_null($title) && $object) ? $object->title : $title;
-		$args		= array_merge($args, [
-			'data_type'		=> 'taxonomy',
-			'show_in_rest'	=> ['type'=>'integer']
-		]);
+		$object	= isset($args['taxonomy']) && is_string($args['taxonomy']) ? wpjam_get_taxonomy_object($args['taxonomy']) : null;
+		$type	= $args['type'] ?? '';
+		$title	= $args['title'] ??= $object ? $object->title : null;
+		$args	= array_merge($args, ['data_type'=>'taxonomy', 'show_in_rest'=>['type'=>'integer']]);
 
-		if($object && $object->hierarchical && $type != 'text'){
-			if(is_admin()){
-				$selectable	= wp_count_terms($taxonomy) <= 30;
-			}else{
-				$selectable	= !$type || $type == 'select' || ($type == 'mu-text' && array_get($args, 'item_type') == 'select');
+		if($object && ($object->hierarchical || ($type == 'select' || $type == 'mu-select'))){
+			if(is_admin() && !$type && $object->levels > 1 && $object->selectable){
+				return array_merge($args, ['type'=>'fields', 'render'=>[self::class, 'render_callback']]);
 			}
 
-			if($selectable){
-				$type		= $type ?: 'select';
-				$levels		= $type == 'mu-text' ? 0 : $object->levels;
-				$defaults	= [];
-				$option_all	= array_pull($args, 'option_all', true);
-
-				if($option_all !== false){
-					$option_all	= $option_all === true ? '请选择' : $option_all;
-					$defaults	= [''=>$option_all];
+			if(!$type || ($type == 'mu-text' && empty($args['item_type']))){
+				if(!is_admin() || $object->selectable){
+					$type	= $type ? 'mu-select' : 'select';
 				}
+			}elseif($type == 'mu-text' && $args['item_type'] == 'select'){
+				$type	= 'mu-select';
+			}
 
-				if($levels > 1 && $type == 'select' && is_admin()){
-					$fields	= [];
-
-					for($level=0; $level < $levels; $level++){
-						$sub_key	= 'level_'.$level;
-
-						$fields[$sub_key]	= [
-							'type'			=> 'select',
-							'options'		=> $defaults,
-							'show_in_rest'	=> ['type'=>'integer']
-						];
-
-						if($level > 0){
-							$fields[$sub_key]	+= [
-								'data_type'	=> 'taxonomy',
-								'taxonomy'	=> $taxonomy,
-								'show_if'	=> ['key'=>'level_'.($level-1), 'compare'=>'!=', 'value'=>0, 'query_arg'=>'parent'],
-							];
-						}
-					}
-
-					$field	= wp_parse_args($args, [
-						'type'		=> 'fields',
-						'fields'	=> $fields,
-						'render'	=> [self::class, 'render_field']
-					]);
-
-					if($option_all === false){
-						$field['value']	= $fields['level_0']['options'] ? array_key_first($fields['level_0']['options']) : 0;
-					}
-
-					return $field;
-				}else{
-					$terms		= wpjam_get_terms(['taxonomy'=>$taxonomy, 'hide_empty'=>0, 'format'=>'flat']);
-					$options	= $terms ? array_column($terms, 'name', 'id') : [];
-					$options	= $defaults+$options;
-
-					if($type == 'mu-text'){
-						$args['item_type']	= 'select';
-					}
-
-					return wp_parse_args($args, [
-						'type'		=> 'select',
-						'options'	=> $options
-					]);
-				}
+			if($type == 'select' || $type == 'mu-select'){
+				return array_merge($args, ['type'=>$type, 'options'=>[self::class, 'options_callback']]);
 			}
 		}
 
-		return wp_parse_args($args, [
-			'type'			=> 'text',
-			'class'			=> 'all-options',
-			'placeholder'	=> '请输入'.$title.'ID或者输入关键字筛选',
-		]);
+		return wp_parse_args($args, ['type'=>'text', 'class'=>'all-options', 'placeholder'=>'请输入'.$title.'ID或者输入关键字筛选']);
 	}
 
-	public static function render_field($args, $field){
-		if($field->value){
-			$value		= $field->value;
-			$taxonomy	= $field->taxonomy;
-			$fields		= $field->fields;
-			$terms		= get_terms(['taxonomy'=>$taxonomy, 'hide_empty'=>0]);
-			$level		= count(get_ancestors($value, $taxonomy, 'taxonomy'));
+	public static function render_callback($args, $field){
+		$taxonomy	= $field->taxonomy;
+		$values		= $field->value ? array_reverse([$field->value, ...get_ancestors($field->value, $taxonomy, 'taxonomy')]) : [];
+		$object		= wpjam_get_taxonomy_object($taxonomy);
+		$terms		= get_terms(['taxonomy'=>$taxonomy, 'hide_empty'=>0]);
+		$defaults	= $field->parse_option_all(true);
+		$parent		= 0;
 
-			for($i=$level+1; $i >= 0; $i--){
-				if($i == $level+1){
-					if(!isset($fields['level_'.$i])){
-						continue;
-					}
+		for($level=0; $level < $object->levels; $level++){
+			$options	= is_null($parent) ? [] : array_column(wp_list_filter($terms, ['parent'=>$parent]), 'name', 'term_id');
+			$sub_key	= 'level_'.$level;
+			$value		= $values[$level] ?? 0;
+			$parent		= $value ?: null;
 
-					$parent	= $value;
-					$value	= 0;
-				}else{
-					$parent	= get_term($value, $taxonomy)->parent;
-				}
+			$fields[$sub_key]	= [
+				'type'		=> 'select',
+				'value'		=> $value,
+				'options'	=> $defaults+$options
+			];
 
-				$fields['level_'.$i]['value']	= $value;
-				$fields['level_'.$i]['options']	+= array_column(wp_list_filter($terms, ['parent'=>$parent]), 'name', 'term_id');
-
-				$value	= $parent;
+			if($level > 0){
+				$fields[$sub_key]	+= [
+					'data_type'	=> 'taxonomy',
+					'taxonomy'	=> $taxonomy,
+					'show_if'	=> ['key'=>'level_'.($level-1), 'compare'=>'!=', 'value'=>0, 'query_arg'=>'parent'],
+				];
 			}
-
-			$field->fields	= $fields;
 		}
 
-		return $field->render_by_fields($args);
+		return $field->update_arg('fields', $fields)->render_by_fields($args);
+	}
+
+	public static function options_callback($field){
+		$terms	= wpjam_get_terms(['taxonomy'=>$field->taxonomy, 'hide_empty'=>0, 'format'=>'flat', 'parse'=>false]);
+
+		return $field->parse_option_all(true)+($terms ? array_column($terms, 'name', 'term_id') : []);
 	}
 
 	public static function get_fields($args){
-		$taxonomy	= $args['taxonomy'];
-		$object		= wpjam_get_taxonomy_object($taxonomy);
+		$object	= wpjam_get_taxonomy_object($args['taxonomy']);
 
-		return $object ? [$object->query_key => self::get_field(['taxonomy'=>$taxonomy, 'required'=>true])] : [];
+		return $object ? [$object->query_key => self::get_field(['taxonomy'=>$args['taxonomy'], 'required'=>true])] : [];
 	}
 }
 
@@ -941,7 +778,7 @@ class WPJAM_Author_Data_Type{
 	public static function get_path(...$args){
 		if(is_array($args[0])){
 			$args	= $args[0];
-			$author	= (int)array_pull($args, 'author');
+			$author	= (int)wpjam_pull($args, 'author');
 		}else{
 			$author	= $args[0];
 			$args	= $args[1];
@@ -992,9 +829,31 @@ class WPJAM_Video_Data_Type{
 			}
 
 			return '';
-		}else{
-			return $id_or_url;
 		}
+
+		return $id_or_url;
+	}
+
+	public static function _get_qqv_mp4($vid){
+		$response	= wpjam_remote_request('http://vv.video.qq.com/getinfo?otype=json&platform=11001&vid='.$vid, ['timeout'=>4]);
+
+		if(is_wp_error($response)){
+			return $response;
+		}
+
+		$response	= trim(substr($response, strpos($response, '{')),';');
+		$response	= wpjam_try('wpjam_json_decode', $response);
+
+		if(empty($response['vl'])){
+			return new WP_Error('error', '腾讯视频不存在或者为收费视频！');
+		}
+
+		$u	= $response['vl']['vi'][0];
+		$p0	= $u['ul']['ui'][0]['url'];
+		$p1	= $u['fn'];
+		$p2	= $u['fvkey'];
+
+		return $p0.$p1.'?vkey='.$p2;
 	}
 
 	public static function get_qqv_mp4($vid){
@@ -1002,35 +861,7 @@ class WPJAM_Video_Data_Type{
 			return new WP_Error('error', '无效的腾讯视频');
 		}
 
-		$mp4 = wp_cache_get($vid, 'qqv_mp4');
-
-		if($mp4 === false){
-			$response	= wpjam_remote_request('http://vv.video.qq.com/getinfo?otype=json&platform=11001&vid='.$vid, [
-				'timeout'				=> 4,
-				'json_decode_required'	=> false
-			]);
-
-			if(is_wp_error($response)){
-				return $response;
-			}
-
-			$response	= trim(substr($response, strpos($response, '{')),';');
-			$response	= wpjam_try('wpjam_json_decode', $response);
-
-			if(empty($response['vl'])){
-				return new WP_Error('error', '腾讯视频不存在或者为收费视频！');
-			}
-
-			$u		= $response['vl']['vi'][0];
-			$p0		= $u['ul']['ui'][0]['url'];
-			$p1		= $u['fn'];
-			$p2		= $u['fvkey'];
-			$mp4	= $p0.$p1.'?vkey='.$p2;
-
-			wp_cache_set($vid, $mp4, 'qqv_mp4', HOUR_IN_SECONDS*6);
-		}
-
-		return $mp4;
+		return wpjam_cache($vid, fn() => self::_get_qqv_mp4($vid), 'qqv_mp4', HOUR_IN_SECONDS*6);
 	}
 
 	public static function query_items($args){
@@ -1056,21 +887,21 @@ class WPJAM_Model_Data_Type{
 	public static function query_items($args){
 		$args	= array_except($args, ['label_key', 'id_key']);
 		$args	= wp_parse_args($args, ['number'=>10]);
-		$model	= array_pull($args, 'model');
+		$model	= wpjam_pull($args, 'model');
 		$query	= wpjam_catch([$model, 'query'], $args);
 
 		return is_wp_error($query) ? $query : $query->items;
 	}
 
 	public static function parse_item($item, $args){
-		$label_key	= array_pull($args, 'label_key', 'title');
-		$id_key		= array_pull($args, 'id_key', 'id');
+		$label_key	= wpjam_pull($args, 'label_key', 'title');
+		$id_key		= wpjam_pull($args, 'id_key', 'id');
 
 		return ['label'=>$item[$label_key], 'value'=>$item[$id_key]];
 	}
 
 	public static function query_label($id, $args){
-		$model	= array_pull($args, 'model');
+		$model	= wpjam_pull($args, 'model');
 		$data	= wpjam_catch([$model, 'get'], $id);
 
 		if($data && !is_wp_error($data)){
@@ -1084,7 +915,7 @@ class WPJAM_Model_Data_Type{
 
 	public static function validate_value($value, $args){
 		if($value){
-			$model	= array_pull($args, 'model');
+			$model	= wpjam_pull($args, 'model');
 			$result	= wpjam_catch([$model, 'get'], $value);
 
 			return is_wp_error($result) ? $result : $value;
@@ -1094,7 +925,7 @@ class WPJAM_Model_Data_Type{
 	}
 
 	public static function get_meta_type($args){
-		$model		= array_pull($args, 'model');
+		$model		= wpjam_pull($args, 'model');
 		$meta_type	= wpjam_catch([$model, 'get_meta_type']);
 
 		return is_wp_error($meta_type) ? '' : $meta_type;

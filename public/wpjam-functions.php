@@ -2,28 +2,32 @@
 // register
 function wpjam_register($group, $name, $args=[]){
 	if($group && $name){
-		return WPJAM_Register::register_by_group($group, $name, $args);
+		$object	= new WPJAM_Register($name, $args, $group);
+
+		WPJAM_Register::call_group('add_object_by_'.$group, $name, $object);
+
+		return $object;
 	}
 }
 
-function wpjam_unregister($group, $name, $args=[]){
+function wpjam_unregister($group, $name){
 	if($group && $name){
-		WPJAM_Register::unregister_by_group($group, $name, $args);
+		WPJAM_Register::call_group('remove_object_by_'.$group, $name);
 	}
 }
 
 function wpjam_get_registered_object($group, $name){
 	if($group && $name){
-		return wpjam_get_registereds($group)[$name] ?? null;
+		return WPJAM_Register::call_group('get_object_by_'.$group, $name);
 	}
 }
 
 function wpjam_get_registereds($group){
-	return $group ? WPJAM_Register::get_by_group($group) : [];
+	return $group ? WPJAM_Register::call_group('get_objects_by_'.$group) : [];
 }
 
 function wpjam_args($args=[]){
-	return new WPJAM_Args($args);
+	return new WPJAM_Args(wpjam_array($args));
 }
 
 // Items
@@ -99,53 +103,50 @@ function wpjam_has_path($platform, $page_key, $strict=false){
 function wpjam_get_path($platform, $page_key, $args=[]){
 	$object	= WPJAM_Platform::get($platform);
 
-	if($object){
-		if(is_array($page_key)){
-			$args		= $page_key;
-			$page_key	= array_pull($args, 'page_key');
-		}
-
-		return $object->get_path($page_key, $args);
+	if(!$object){
+		return '';
 	}
 
-	return '';
+	if(is_array($page_key)){
+		$args		= $page_key;
+		$page_key	= wpjam_pull($args, 'page_key');
+	}
+
+	return $object->get_path($page_key, $args);
 }
 
 function wpjam_get_tabbar($platform, $page_key=''){
 	$object	= WPJAM_Platform::get($platform);
 
-	if($object){
-		if($page_key){
-			return $object->get_tabbar($page_key);
-		}else{
-			return array_filter(array_map([$object, 'get_tabbar'], $object->get_items()));
-		}
+	if(!$object){
+		return [];
 	}
 
-	return [];
+	if($page_key){
+		return $object->get_tabbar($page_key);
+	}
+
+	return array_filter(wpjam_fill(array_keys($object->get_items()), [$object, 'get_tabbar']));
 }
 
 function wpjam_get_page_keys($platform, $args=null, $operator='AND'){
 	$object	= WPJAM_Platform::get($platform);
 
-	if($object){
-		$items	= $object->get_items();
-
-		if(is_string($args) && in_array($args, ['with_page', 'page'])){
-			foreach($items as $page_key => &$item){
-				$page	= $object->get_page($item);
-				$item	= $page ? ['page'=>$page, 'page_key'=>$page_key] : null;
-			}
-
-			return array_values(array_filter($items));
-		}else{
-			$items	= is_array($args) ? wp_list_filter($items, $args, $operator) : $items;
-
-			return array_keys($items);
-		}
+	if(!$object){
+		return [];
 	}
 
-	return [];
+	$items	= $object->get_items();
+
+	if(is_string($args) && in_array($args, ['with_page', 'page'])){
+		$items	= array_map(fn($pk)=>['page'=>$object->get_page($pk), 'page_key'=>$pk], array_keys($items));
+
+		return array_values(array_filter($items, fn($item) => !empty($item['page'])));
+	}else{
+		$items	= is_array($args) ? wp_list_filter($items, $args, $operator) : $items;
+
+		return array_keys($items);
+	}
 }
 
 function wpjam_register_path($name, ...$args){
@@ -159,21 +160,20 @@ function wpjam_unregister_path($name, $platform=''){
 function wpjam_get_path_fields($platforms=null, $args=[]){
 	$object	= WPJAM_Platforms::get_instance($platforms);
 
-	if($object){
-		$args	= is_array($args) ? $args : ['for'=>$args];
-		$for	= array_pull($args, 'for');
-		$strict	= $for == 'qrcode';
-
-		return $object->get_fields($args, $strict);
+	if(!$object){
+		return [];
 	}
 
-	return [];
+	$args	= is_array($args) ? $args : ['for'=>$args];
+	$strict	= wpjam_pull($args, 'for') == 'qrcode';
+
+	return $object->get_fields($args, $strict);
 }
 
-function wpjam_parse_path_item($item, $platform=null, $postfix='', $title=''){
+function wpjam_parse_path_item($item, $platform=null, $postfix=''){
 	$object	= WPJAM_Platforms::get_instance($platform);
 
-	return $object ? $object->parse_item($item, $postfix, $title) : ['type'=>'none'];
+	return $object ? $object->parse_item($item, $postfix) : ['type'=>'none'];
 }
 
 function wpjam_validate_path_item($item, $platforms, $postfix='', $title=''){
@@ -207,6 +207,24 @@ function wpjam_get_data_type_object($name){
 	return WPJAM_Data_Type::get($name);
 }
 
+function wpjam_strip_data_type($args){
+	$value	= wpjam_pull($args, 'data_type');
+
+	return $value ? wpjam_except($args, $value) : $args;
+}
+
+function wpjam_parse_data_type(&$args, $strip=false){
+	$data_type	= $strip ? wpjam_pull($args, 'data_type') : array_get($args, 'data_type');
+
+	if($data_type){
+		$type_value	= $strip ? wpjam_pull($args, $data_type) : array_get($args, $data_type);
+
+		return ['data_type'=>$data_type, $data_type=>($type_value ?: '')];
+	}
+
+	return [];
+}
+
 function wpjam_get_data_type_field($name, $args){
 	$object	= WPJAM_Data_Type::get($name);
 
@@ -238,10 +256,6 @@ function wpjam_setting($type, $option, $blog_id=0){
 	return WPJAM_Setting::get_instance($type, $option, $blog_id);
 }
 
-function wpjam_get_setting_object($type, $option, $blog_id=0){
-	return wpjam_setting($type, $option, $blog_id);
-}
-
 function wpjam_get_setting($option, $name, $blog_id=0){
 	return wpjam_setting('option', $option, $blog_id)->get_setting($name);
 }
@@ -260,17 +274,6 @@ function wpjam_get_option($option, $blog_id=0, ...$args){
 
 function wpjam_update_option($option, $value, $blog_id=0){
 	return wpjam_setting('option', $option, $blog_id)->update_option($value);
-}
-
-function wpjam_migrate_option($from, $to, $default=null){
-	if(get_option($to, $default) === $default){
-		$data	= get_option($from) ?: [];
-		$data	= array_merge($data, ['migrate_form'=>$from]);
-
-		update_option($to, $data);
-
-		delete_option($from);
-	}
 }
 
 function wpjam_get_site_setting($option, $name){
@@ -329,11 +332,7 @@ function wpjam_get_meta_option($meta_type, $name, $return='object'){
 	$object	= WPJAM_Meta_Type::get($meta_type);
 	$option	= $object ? $object->get_option($name) : null;
 
-	if($return == 'object'){
-		return $option;
-	}else{
-		return $option ? $option->to_array() : [];
-	}
+	return $return == 'object' ? $option : ($option ? $option->to_array() : []);
 }
 
 function wpjam_get_by_meta($meta_type, ...$args){
@@ -362,9 +361,7 @@ function wpjam_delete_metadata($meta_type, $object_id, $key){
 	$object	= WPJAM_Meta_Type::get($meta_type);
 
 	if($object && $key){
-		foreach((array)$key as $k){
-			$object->delete_data($object_id, $k);
-		}
+		wpjam_map((array)$key, fn($k) => $object->delete_data($object_id, $k));
 	}
 
 	return true;
@@ -379,15 +376,11 @@ function wpjam_register_lazyloader($name, $args){
 
 function wpjam_lazyload($name, $ids){
 	if(is_array($name)){
-		$names	= $name;
-
-		foreach($names as $key => $name){
-			$values	= array_column($ids, $key);
-
-			foreach((array)$name as $n){
-				wpjam_lazyload($n, $values);
-			}
-		}
+		if(wp_is_numeric_array($name)){
+			array_walk($name, fn($n) => wpjam_lazyload($n, $ids));
+		}else{
+			array_walk($name, fn($n, $k) => wpjam_lazyload($n, array_column($ids, $k)));
+		}	
 
 		return;
 	}
@@ -479,9 +472,7 @@ function wpjam_add_post_type_field($post_type, ...$args){
 
 	if($object){
 		if(is_array($args[0])){
-			foreach($args[0] as $key => $field){
-				$object->add_item($key, $field, '_fields');
-			}
+			array_walk($args[0], fn($field, $key) => $object->add_item($key, $field, '_fields'));
 		}else{
 			$object->add_item($args[0], $args[1], '_fields');
 		}
@@ -561,35 +552,20 @@ function wpjam_get_post($post, $args=[]){
 	return $object ? $object->parse_for_json($args) : null;
 }
 
-function wpjam_get_posts($post_ids, $args=[], $parse=false){
-	if(is_string($post_ids) || wp_is_numeric_array($post_ids)){
-		$posts	= WPJAM_Post::get_by_ids(wp_parse_id_list($post_ids));
-
-		if(is_bool($args)){
-			$parse	= $args;
-			$args	= [];
-		}
-
-		if(!$parse){
-			return $posts;
-		}
-
-		$parsed	= [];
-		$filter	= array_pull($args, 'filter');
-
-		foreach($posts as $post){
-			$object	= wpjam_post($post);
-
-			if($object){
-				$json		= $object->parse_for_json($args);
-				$parsed[]	= $filter ? apply_filters($filter, $json, $post_id, $args) : $json;
-			}
-		}
-
-		return $parsed;
+function wpjam_get_posts($query, $parse=false){
+	if($parse !== false){
+		$args	= is_array($parse) ? $parse : [];
+		$parse	= true;
 	}
 
-	return wpjam_parse_query($post_ids, $args, $parse);
+	if(is_string($query) || wp_is_numeric_array($query)){
+		$ids	= wp_parse_id_list($query);
+		$posts	= WPJAM_Post::get_by_ids($ids);
+
+		return $parse ? array_values(wpjam_filter(array_map(fn($p) => wpjam_get_post($p, $args), $ids), 'isset', false)) : $posts;
+	}else{
+		return $parse ? wpjam_parse_query($query, $args) : (WPJAM_Posts::query($query))->posts;
+	}
 }
 
 function wpjam_get_post_views($post=null){
@@ -598,7 +574,7 @@ function wpjam_get_post_views($post=null){
 	return $post ? (int)get_post_meta($post->ID, 'views', true) : 0;
 }
 
-function wpjam_update_post_views($post=null, $addon=1){
+function wpjam_update_post_views($post=null, $offset=1){
 	$post	= get_post($post);
 
 	if($post){
@@ -614,7 +590,7 @@ function wpjam_update_post_views($post=null, $addon=1){
 			$viewd	= true;
 		}
 
-		$views	+= $addon;
+		$views	+= $offset;
 
 		update_post_meta($post->ID, 'views', $views);
 
@@ -767,9 +743,7 @@ function wpjam_add_taxonomy_field($taxonomy, ...$args){
 
 	if($object){
 		if(is_array($args[0])){
-			foreach($args[0] as $key => $field){
-				$object->add_item($key, $field, '_fields');
-			}
+			wpjam_map($args[0], fn($field, $k) => $object->add_item($k, $field, '_fields'));
 		}else{
 			$object->add_item($args[0], $args[1], '_fields');
 		}
@@ -827,9 +801,7 @@ if(!function_exists('remove_taxonomy_support')){
 }	
 
 function wpjam_get_taxonomy_query_key($taxonomy){
-	$query_keys	= ['category'=>'cat', 'post_tag'=>'tag_id'];
-
-	return $query_keys[$taxonomy] ?? $taxonomy.'_id';
+	return ['category'=>'cat', 'post_tag'=>'tag_id'][$taxonomy] ?? $taxonomy.'_id';
 }
 
 function wpjam_get_term_id_field($taxonomy='category', $args=[]){
@@ -877,27 +849,36 @@ function wpjam_get_term_object($term, $taxonomy=''){
 	return WPJAM_Term::get_instance($term, $taxonomy);
 }
 
-function wpjam_get_term($term, $taxonomy=''){
-	$object	= wpjam_term($term, $taxonomy);
+function wpjam_get_term($term, $args=[]){
+	$args		= is_array($args) ? $args : ['taxonomy'=>$args];
+	$taxonomy	= wpjam_pull($args, 'taxonomy');
+	$object		= WPJAM_Term::get_instance($term, $taxonomy, false);
 
-	return $object ? $object->parse_for_json() : null;
+	return $object ? $object->parse_for_json($args) : null;
 }
 
-function wpjam_get_terms($term_ids, $max_depth=null){
-	if(is_string($term_ids) || wp_is_numeric_array($term_ids)){
-		$terms	= WPJAM_Term::get_by_ids(wp_parse_id_list($term_ids));
-		$parse	= is_bool($max_depth) ? $max_depth : false;
-		$parsed	= [];
+// $args, $max_depth
+// $term_ids, $args
+function wpjam_get_terms(...$args){
+	if(is_string($args[0]) || wp_is_numeric_array($args[0])){
+		$ids	= wp_parse_id_list(array_shift($args));
+		$terms	= WPJAM_Term::get_by_ids($ids);
+		$args	= array_shift($args);
 
-		foreach($terms as $term){
-			$object		= wpjam_term($term);
-			$parsed[]	= $object->parse_for_json();
+		if(is_bool($args)){
+			$parse	= $args;
+			$args	= [];
+		}else{
+			$args	= is_array($args) ? $args : [];
+			$parse	= wpjam_pull($args, 'parse');
 		}
 
-		return $parsed;
+		return $parse ? array_map(fn($term) => wpjam_get_term($term, $args), $terms) : $terms;
+	}else{
+		$args	= isset($args[1]) ? array_merge($args[0], ['max_depth'=>$args[1]]) : $args[0];
+		
+		return WPJAM_Terms::parse($args);
 	}
-
-	return WPJAM_Terms::parse($term_ids, $max_depth);
 }
 
 function wpjam_get_all_terms($taxonomy){
@@ -975,24 +956,24 @@ function wpjam_get_ajax_data_attr($name, $data=[], $return=null){
 }
 
 // Capability
-function wpjam_register_capability($cap, $map_meta_cap){
-	if(!has_filter('map_meta_cap', 'wpjam_filter_map_meta_cap')){
-		add_filter('map_meta_cap', 'wpjam_filter_map_meta_cap', 10, 4);
-	}
+function wpjam_map_meta_cap(...$args){
+	if(count($args) >=4){	// $caps, $cap, $user_id, $args
+		$map	= (in_array('do_not_allow', $args[0]) || !$args[2]) ? null : wpjam_get_item('map_meta_cap', $args[1]);
 
-	wpjam_add_item('capability', $cap, $map_meta_cap);
-}
+		if($map && is_callable($map)){
+			return call_user_func($map, $args[2], $args[3], $args[1]);
+		}
 
-function wpjam_filter_map_meta_cap($caps, $cap, $user_id, $args){
-	if(!in_array('do_not_allow', $caps) && $user_id){
-		$callback = wpjam_get_item('capability', $cap);
+		return $map ?: $args[0];
+	}elseif(count($args) >= 2){	// $cap, $map_meta_cap
+		if($args[0] && $args[1] && (is_callable($args[1]) || wp_is_numeric_array($args[1]))){
+			if(!wpjam_get_items('map_meta_cap')){
+				add_filter('map_meta_cap', 'wpjam_map_meta_cap', 10, 4);
+			}
 
-		if($callback){
-			return call_user_func($callback, $user_id, $args, $cap);
+			wpjam_add_item('map_meta_cap', $args[0], $args[1]);
 		}
 	}
-
-	return $caps;
 }
 
 // Verification Code
@@ -1040,15 +1021,19 @@ function wpjam_add_user_notice($user_id, $notice){
 }
 
 function wpjam_preprocess_args($args){
-	$hooks	= array_pull($args, 'hooks');
-	$init	= array_pull($args, 'init');
+	$hooks	= wpjam_pull($args, 'hooks');
+	$init	= wpjam_pull($args, 'init');
+
+	if($hooks && $hooks !== true){
+		wpjam_hooks($hooks);
+	}
 
 	if($init && $init !== true){
 		wpjam_load('init', $init);
 	}
 
-	if($hooks && $hooks !== true){
-		wpjam_hooks($hooks);
+	if(!empty($args['capability']) && !empty($args['map_meta_cap'])){
+		wpjam_map_meta_cap($args['capability'], wpjam_pull($args, 'map_meta_cap'));
 	}
 
 	return $args;
@@ -1089,9 +1074,9 @@ function wpjam_add_menu_page(...$args){
 
 		if(is_admin()){
 			if(!empty($menu_page['tab_slug'])){
-				wpjam_add_tab_page($menu_page);
+				WPJAM_Tab_Page::add($menu_page);
 			}else{
-				wpjam_add_admin_menu($menu_page);
+				WPJAM_Admin::add_menu($menu_page);
 			}
 		}
 	}

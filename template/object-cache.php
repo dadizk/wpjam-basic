@@ -247,12 +247,9 @@ if(class_exists('Memcached')){
 			}
 			
 			$value	= $this->mc->get($key);
-			
-			if($this->mc->getResultCode() == Memcached::RES_NOTFOUND){
-				$found	= false;
-			}else{
-				$found	= true;
+			$found	= $this->mc->getResultCode() == Memcached::RES_NOTFOUND;
 
+			if($found){
 				$this->add_to_internal($key, $value);
 			}
 
